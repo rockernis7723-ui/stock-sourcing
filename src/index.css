@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #f1f5f9;
+}
+
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Barcode scanner line animation */
+@keyframes scanLine {
+  0%   { top: 4px; }
+  50%  { top: calc(100% - 4px); }
+  100% { top: 4px; }
+}
+
+.scan-line {
+  animation: scanLine 2s ease-in-out infinite;
+}
+
+/* Hide Html5Qrcode default UI clutter */
+#qr-reader-live > img,
+#qr-reader-live__dashboard,
+#qr-reader-live__dashboard_section_csr,
+#qr-reader-live__header_message {
+  display: none !important;
+}
+
+#qr-reader-live video {
+  width: 100% !important;
+  height: 280px !important;
+  object-fit: cover;
+  display: block;
+}
