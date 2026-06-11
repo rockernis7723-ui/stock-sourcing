@@ -5,4 +5,4 @@ cmds = ["npm install"]
 cmds = ["npx vite build"]
 
 [start]
-cmd = "npx serve -s dist -l 8080"
+cmd = "npx serve -s dist -l $PORT"
