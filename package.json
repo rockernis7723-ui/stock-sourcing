@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview"
   },
-  "dependencies": {
+  "dependencies": {"jsbarcode": "^3.11.5",
+"html2pdf.js": "^0.10.1"
     "@supabase/supabase-js": "^2.45.0",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.400.0",
