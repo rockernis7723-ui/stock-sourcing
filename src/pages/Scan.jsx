@@ -12,6 +12,7 @@ export default function Scan() {
   const [expiryDate, setExpiryDate] = useState('')
   const [note, setNote] = useState('')
   const [status, setStatus] = useState(null)
+  const [refNo, setRefNo] = useState('')
   const [manualBarcode, setManualBarcode] = useState('')
   const [scanning, setScanning] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
@@ -110,6 +111,18 @@ export default function Scan() {
     }
   }
 
+  async function generateRefNo() {
+    const now = new Date()
+    const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '')
+    const { count } = await supabase
+      .from('transactions')
+      .select('*', { count: 'exact', head: true })
+      .eq('type', 'IN')
+      .gte('created_at', `${now.toISOString().slice(0, 10)}T00:00:00`)
+    const seq = String((count || 0) + 1).padStart(3, '0')
+    return `SMM-${dateStr}-${seq}`
+  }
+
   async function handleSubmit() {
     if (!product) return
     if (mode === 'IN' && !expiryDate) {
@@ -133,10 +146,13 @@ export default function Scan() {
       if (remaining > 0) { setStatus({ type: 'error', message: 'สต็อกไม่เพียงพอ' }); return }
       await supabase.rpc('update_product_stock', { p_product_id: product.id, p_delta: -quantity })
     }
+    const generatedRef = mode === 'IN' ? await generateRefNo() : null
+    if (generatedRef) setRefNo(generatedRef)
     await supabase.from('transactions').insert({
       product_id: product.id, type: mode, quantity,
       expiry_date: mode === 'IN' ? expiryDate : null,
-      note, created_by: user.id,
+      note: mode === 'IN' ? `[${generatedRef}] ${note}`.trim() : note,
+      created_by: user.id,
       photo_url: photo?.url || null,
     })
     setStatus({ type: 'success', message: `${mode === 'IN' ? 'รับเข้า' : 'จ่ายออก'} ${product.name} จำนวน ${quantity} ${product.unit} สำเร็จ` })
@@ -171,7 +187,13 @@ export default function Scan() {
             <CheckCircle size={20} className="text-green-600 shrink-0 mt-0.5" />
             <p className="text-sm font-medium text-green-700">{status.message}</p>
           </div>
-          <button onClick={() => setStatus(null)}
+          {refNo && (
+            <div className="bg-white border border-green-300 rounded-lg px-4 py-3 text-center">
+              <p className="text-xs text-slate-500 mb-1">เลขรับสินค้า</p>
+              <p className="text-lg font-bold text-green-700 tracking-wider">{refNo}</p>
+            </div>
+          )}
+          <button onClick={() => { setStatus(null); setRefNo('') }}
             className="w-full py-3.5 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl text-base transition-colors">
             📷 ทำรายการต่อ
           </button>
