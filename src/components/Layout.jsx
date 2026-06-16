@@ -1,9 +1,10 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, ScanLine, Package, History,
-  BarChart2, Users, LogOut, ChevronRight, Bell
+  BarChart2, Users, LogOut, ChevronRight, Bell, Sun, Moon
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+import { useTheme } from '../context/ThemeContext'
 
 const navItems = [
   { path: '/', label: 'แดชบอร์ด', mobileLabel: 'หน้าหลัก', icon: LayoutDashboard, roles: ['admin', 'manager', 'staff'] },
@@ -17,6 +18,7 @@ const navItems = [
 
 export default function Layout({ children }) {
   const { profile, signOut } = useAuth()
+  const { theme, toggleTheme } = useTheme()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -30,6 +32,15 @@ export default function Layout({ children }) {
 
   return (
     <div className="flex h-screen bg-slate-100">
+      {/* Dark/light toggle - fixed top-right of screen (desktop) */}
+      <button
+        onClick={toggleTheme}
+        className="hidden lg:flex fixed top-3 right-3 z-30 w-10 h-10 rounded-full bg-white shadow-md border border-slate-200 items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors"
+        aria-label="สลับโหมดมืด/สว่าง"
+      >
+        {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+      </button>
+
       {/* Sidebar - desktop only */}
       <aside className="hidden lg:flex flex-col w-64 bg-white shadow-lg shrink-0">
         <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100">
@@ -100,6 +111,13 @@ export default function Layout({ children }) {
             <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center text-sm font-bold text-white">
               {profile?.full_name?.[0]?.toUpperCase() || 'U'}
             </div>
+            <button
+              onClick={toggleTheme}
+              className="p-2 text-red-200 hover:text-white transition-colors"
+              aria-label="สลับโหมดมืด/สว่าง"
+            >
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
             <button
               onClick={handleSignOut}
               className="p-2 text-red-200 hover:text-white transition-colors"

@@ -52,6 +52,7 @@ export default function Reports() {
 
     const stockRows = stockSummary.map(p => ({
       'ชื่อสินค้า': p.name,
+      'รหัสสินค้า (SKU)': p.product_code || '',
       'บาร์โค้ด': p.barcode,
       'สต็อกปัจจุบัน': p.current_stock,
       'หน่วย': p.unit,
@@ -212,7 +213,7 @@ export default function Reports() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                   <tr>
-                    {['ชื่อสินค้า', 'บาร์โค้ด', 'สต็อก', 'ขั้นต่ำ', 'สถานะ', 'ล็อตใกล้หมดอายุ'].map(h => (
+                    {['ชื่อสินค้า', 'รหัสสินค้า (SKU)', 'บาร์โค้ด', 'สต็อก', 'ขั้นต่ำ', 'สถานะ', 'ล็อตใกล้หมดอายุ'].map(h => (
                       <th key={h} className="px-4 py-3 text-left font-medium">{h}</th>
                     ))}
                   </tr>
@@ -228,6 +229,7 @@ export default function Reports() {
                     return (
                       <tr key={p.id} className={`hover:bg-slate-50 ${isLow ? 'bg-red-50/50' : ''}`}>
                         <td className="px-4 py-3 font-medium text-slate-800">{p.name}</td>
+                        <td className="px-4 py-3 text-slate-500 font-mono text-xs">{p.product_code || '-'}</td>
                         <td className="px-4 py-3 text-slate-500 font-mono text-xs">{p.barcode}</td>
                         <td className="px-4 py-3 font-semibold text-slate-800">{p.current_stock} {p.unit}</td>
                         <td className="px-4 py-3 text-slate-500">{p.min_stock}</td>
@@ -265,7 +267,7 @@ export default function Reports() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-slate-800 truncate">{p.name}</p>
-                        <p className="text-xs text-slate-400 mt-0.5 font-mono">{p.barcode}</p>
+                        <p className="text-xs text-slate-400 mt-0.5 font-mono">{p.product_code ? `${p.product_code} · ` : ''}{p.barcode}</p>
                       </div>
                       <div className="text-right shrink-0">
                         <p className={`text-lg font-bold ${isLow ? 'text-red-600' : 'text-slate-800'}`}>

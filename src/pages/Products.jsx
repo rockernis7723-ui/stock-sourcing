@@ -49,22 +49,26 @@ export default function Products() {
       if (editId) {
         await supabase.from('products').update(form).eq('id', editId)
       } else {
-        // Generate SKU
+        // Generate SKU: SMM-YYMMDDNNNNN
+        const now = new Date()
+        const dateStr = `${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+
         const { data: lastProduct } = await supabase
           .from('products')
           .select('product_code')
           .not('product_code', 'is', null)
-          .like('product_code', 'SKU-%')
+          .like('product_code', 'SMM-%')
           .order('created_at', { ascending: false })
           .limit(1)
 
         let nextNumber = 1
         if (lastProduct && lastProduct.length > 0 && lastProduct[0].product_code) {
-          const lastNum = parseInt(lastProduct[0].product_code.replace('SKU-', ''))
+          const digits = lastProduct[0].product_code.replace('SMM-', '')
+          const lastNum = parseInt(digits.slice(-5))
           if (!isNaN(lastNum)) nextNumber = lastNum + 1
         }
 
-        const productCode = form.product_code.trim() || `SKU-${String(nextNumber).padStart(3, '0')}`
+        const productCode = form.product_code.trim() || `SMM-${dateStr}${String(nextNumber).padStart(5, '0')}`
 
         await supabase.from('products').insert({
           ...form,
@@ -249,7 +253,7 @@ export default function Products() {
                   type="text"
                   value={form.product_code}
                   onChange={e => setForm(f => ({ ...f, product_code: e.target.value }))}
-                  placeholder="เช่น SKU-001 หรือ PRD-A01"
+                  placeholder="เช่น SMM-26061600001"
                   className="w-full px-3 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
                 />
               </div>
