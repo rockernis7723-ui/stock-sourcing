@@ -22,7 +22,8 @@ export default function Transactions() {
 
     if (typeFilter !== 'ALL') query = query.eq('type', typeFilter)
 
-    const { data } = await query
+    const { data, error } = await query
+    if (error) console.error('Transactions error:', error)
     setTransactions(data || [])
     setLoading(false)
   }

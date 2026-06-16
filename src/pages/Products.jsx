@@ -49,21 +49,22 @@ export default function Products() {
       if (editId) {
         await supabase.from('products').update(form).eq('id', editId)
       } else {
-        // Generate product_code (Order Number)
+        // Generate SKU
         const { data: lastProduct } = await supabase
           .from('products')
           .select('product_code')
+          .not('product_code', 'is', null)
+          .like('product_code', 'SKU-%')
           .order('created_at', { ascending: false })
           .limit(1)
 
-        let nextNumber = 20290001
+        let nextNumber = 1
         if (lastProduct && lastProduct.length > 0 && lastProduct[0].product_code) {
-          const lastCode = lastProduct[0].product_code
-          const lastNum = parseInt(lastCode.split('-')[1])
-          nextNumber = lastNum + 1
+          const lastNum = parseInt(lastProduct[0].product_code.replace('SKU-', ''))
+          if (!isNaN(lastNum)) nextNumber = lastNum + 1
         }
 
-        const productCode = `SC02-${nextNumber}`
+        const productCode = form.product_code.trim() || `SKU-${String(nextNumber).padStart(3, '0')}`
 
         await supabase.from('products').insert({
           ...form,
@@ -194,7 +195,7 @@ export default function Products() {
                   <div className="flex items-center gap-2">
                     <p className="font-medium text-slate-800 truncate">{p.name}</p>
                     {p.product_code && (
-                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded shrink-0">
+                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded shrink-0" title="SKU">
                         {p.product_code}
                       </span>
                     )}
@@ -234,10 +235,23 @@ export default function Products() {
               <button onClick={() => setModal(false)}><X size={20} className="text-slate-400" /></button>
             </div>
 
-            {editId && form.product_code && (
+            {editId && form.product_code ? (
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                <p className="text-xs text-blue-600 font-medium">เลขอ้างอิง (Order Number)</p>
+                <p className="text-xs text-blue-600 font-medium">SKU (รหัสสินค้า)</p>
                 <p className="text-sm font-bold text-blue-900">{form.product_code}</p>
+              </div>
+            ) : !editId && (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  SKU <span className="text-slate-400 font-normal">(ปล่อยว่างให้ระบบสร้างอัตโนมัติ)</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.product_code}
+                  onChange={e => setForm(f => ({ ...f, product_code: e.target.value }))}
+                  placeholder="เช่น SKU-001 หรือ PRD-A01"
+                  className="w-full px-3 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
               </div>
             )}
 
@@ -340,7 +354,7 @@ export default function Products() {
               <svg ref={barcodeRef}></svg>
               <p className="text-xs text-slate-500">{printProduct.barcode}</p>
               {printProduct.product_code && (
-                <p className="text-xs font-bold text-blue-600">Order: {printProduct.product_code}</p>
+                <p className="text-xs font-bold text-blue-600">SKU: {printProduct.product_code}</p>
               )}
             </div>
 
