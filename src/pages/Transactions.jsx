@@ -70,7 +70,7 @@ export default function Transactions() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                   <tr>
-                    {['วันที่/เวลา', 'ประเภท', 'สินค้า', 'จำนวน', 'วันหมดอายุ', 'ผู้ดำเนินการ', 'หมายเหตุ'].map(h => (
+                    {['วันที่/เวลา', 'เลขที่อ้างอิง', 'ประเภท', 'สินค้า', 'จำนวน', 'วันหมดอายุ', 'ผู้ดำเนินการ', 'หมายเหตุ'].map(h => (
                       <th key={h} className="px-4 py-3 text-left font-medium">{h}</th>
                     ))}
                   </tr>
@@ -81,6 +81,7 @@ export default function Transactions() {
                       <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
                         {new Date(tx.created_at).toLocaleString('th-TH', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                       </td>
+                      <td className="px-4 py-3 text-slate-700 font-medium whitespace-nowrap">{tx.ref_no || '-'}</td>
                       <td className="px-4 py-3">
                         <span className={`text-xs font-bold px-2 py-1 rounded-full ${tx.type === 'IN' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
                           {tx.type === 'IN' ? 'รับเข้า' : 'จ่ายออก'}
@@ -110,6 +111,7 @@ export default function Transactions() {
                         {new Date(tx.created_at).toLocaleString('th-TH', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                         {tx.profiles?.full_name ? ` · ${tx.profiles.full_name}` : ''}
                       </p>
+                      {tx.ref_no && <p className="text-xs text-slate-500 mt-0.5">เลขที่: {tx.ref_no}</p>}
                     </div>
                     <div className="text-right shrink-0">
                       <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${tx.type === 'IN' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>

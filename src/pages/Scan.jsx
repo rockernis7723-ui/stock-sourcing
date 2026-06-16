@@ -117,8 +117,7 @@ export default function Scan() {
     const { count } = await supabase
       .from('transactions')
       .select('*', { count: 'exact', head: true })
-      .eq('type', 'IN')
-      .gte('created_at', `${now.toISOString().slice(0, 10)}T00:00:00`)
+      .like('ref_no', `SMM-${dateStr}-%`)
     const seq = String((count || 0) + 1).padStart(3, '0')
     return `SMM-${dateStr}-${seq}`
   }
@@ -151,7 +150,8 @@ export default function Scan() {
     await supabase.from('transactions').insert({
       product_id: product.id, type: mode, quantity,
       expiry_date: mode === 'IN' ? expiryDate : null,
-      note: mode === 'IN' ? `[${generatedRef}] ${note}`.trim() : note,
+      note,
+      ref_no: generatedRef,
       created_by: user.id,
       photo_url: photo?.url || null,
     })
