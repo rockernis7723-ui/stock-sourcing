@@ -1,7 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, ScanLine, Package, History,
-  BarChart2, Users, LogOut, ChevronRight, Bell, Sun, Moon
+  BarChart2, Users, LogOut, ChevronRight, Bell, Sun, Moon, FileSpreadsheet
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
@@ -13,6 +13,7 @@ const navItems = [
   { path: '/transactions', label: 'ประวัติธุรกรรม', mobileLabel: 'ธุรกรรม', icon: History, roles: ['admin', 'manager', 'staff'] },
   { path: '/reports', label: 'รายงาน', mobileLabel: 'รายงาน', icon: BarChart2, roles: ['admin', 'manager'] },
   { path: '/notifications', label: '🔔 แจ้งเตือน', mobileLabel: 'แจ้ง', icon: Bell, roles: ['admin', 'manager', 'staff'] },
+  { path: '/order-import', label: 'นำเข้าคำสั่งซื้อ', mobileLabel: 'คำสั่งซื้อ', icon: FileSpreadsheet, roles: ['admin', 'manager'] },
   { path: '/users', label: 'จัดการ User', mobileLabel: 'ผู้ใช้', icon: Users, roles: ['admin'] },
 ]
 

@@ -11,6 +11,7 @@ import Transactions from './pages/Transactions'
 import Reports from './pages/Reports'
 import Users from './pages/Users'
 import Notifications from './pages/Notifications'
+import OrderImport from './pages/OrderImport'
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth()
@@ -34,6 +35,7 @@ function AppRoutes() {
       <Route path="/reports" element={<ProtectedRoute allowedRoles={['admin','manager']}><Reports /></ProtectedRoute>} />
       <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute allowedRoles={['admin']}><Users /></ProtectedRoute>} />
+      <Route path="/order-import" element={<ProtectedRoute allowedRoles={['admin','manager']}><OrderImport /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
