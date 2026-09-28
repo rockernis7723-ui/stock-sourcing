@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Upload, Download, ShoppingCart, Package2, AlertCircle, FileSpreadsheet, X, CheckCircle } from 'lucide-react'
+import { Upload, Download, ShoppingCart, Package2, AlertCircle, FileSpreadsheet, X, CheckCircle, Link2 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../lib/supabase'
 
@@ -122,6 +122,11 @@ export default function OrderImport() {
   const [importDate, setImportDate] = useState('')
   const [activeTab, setActiveTab] = useState('buy')
   const [errorMessage, setErrorMessage] = useState('')
+  const [stockProducts, setStockProducts] = useState([])
+  const [mappingItem, setMappingItem] = useState(null)
+  const [mappingProductId, setMappingProductId] = useState('')
+  const [mappingError, setMappingError] = useState('')
+  const [savingMapping, setSavingMapping] = useState(false)
   const fileInputRef = useRef(null)
 
   function handleFileChange(e) {
@@ -184,14 +189,17 @@ export default function OrderImport() {
 
       const { data: products, error } = await supabase
         .from('products')
-        .select('id, name, unit, barcode, product_code, min_stock, stock_lots(quantity)')
+        .select('id, name, unit, barcode, product_code, erp_sku, min_stock, stock_lots(quantity)')
         .order('name')
       if (error) throw new Error(`อ่านข้อมูลสต็อกไม่ได้: ${error.message}`)
+      setStockProducts(products || [])
 
+      const byErpSku = new Map()
       const byBarcode = new Map()
       const byProductCode = new Map()
       const byName = new Map()
       for (const product of products || []) {
+        if (normalize(product.erp_sku)) byErpSku.set(normalize(product.erp_sku), product)
         if (normalize(product.barcode)) byBarcode.set(normalize(product.barcode), product)
         if (normalize(product.product_code)) byProductCode.set(normalize(product.product_code), product)
         if (normalize(product.name)) byName.set(normalize(product.name), product)
@@ -203,6 +211,7 @@ export default function OrderImport() {
 
       for (const item of parsed.orderItems) {
         const match =
+          (item.erpSku && byErpSku.get(normalize(item.erpSku))) ||
           (item.erpSku && byBarcode.get(normalize(item.erpSku))) ||
           (item.erpSku && byProductCode.get(normalize(item.erpSku))) ||
           byName.get(normalize(item.name))
@@ -247,6 +256,35 @@ export default function OrderImport() {
     } finally {
       setLoading(false)
     }
+  }
+
+  function openMapping(item) {
+    setMappingItem(item)
+    setMappingProductId('')
+    setMappingError('')
+  }
+
+  async function saveMapping() {
+    if (!mappingItem || !mappingProductId) return
+    setSavingMapping(true)
+    setMappingError('')
+    const { error } = await supabase
+      .from('products')
+      .update({ erp_sku: mappingItem.erpSku })
+      .eq('id', mappingProductId)
+
+    if (error) {
+      setMappingError(error.message.includes('duplicate')
+        ? 'ERP SKU นี้ถูกจับคู่กับสินค้าอื่นแล้ว'
+        : `บันทึกการจับคู่ไม่ได้: ${error.message}`)
+      setSavingMapping(false)
+      return
+    }
+
+    setMappingItem(null)
+    setMappingProductId('')
+    setSavingMapping(false)
+    await handleAnalyze()
   }
 
   function createWorkbook(rows, sheetName, fileName) {
@@ -515,7 +553,10 @@ export default function OrderImport() {
 
             {activeTab === 'notfound' && (
               <>
-                <p className="text-sm text-slate-500 mb-3">SKU ที่ยังจับคู่กับสินค้าในระบบ Stock ไม่ได้</p>
+                <div className="mb-3">
+                  <p className="text-sm text-slate-600 font-medium">SKU ที่ยังจับคู่กับสินค้าในระบบ Stock ไม่ได้</p>
+                  <p className="text-xs text-slate-400 mt-0.5">กด “จับคู่สินค้า” แล้วเลือกสินค้าที่ตรงกัน ระบบจะจำ ERP SKU ไว้ใช้ครั้งต่อไป</p>
+                </div>
                 {results.notFound.length === 0 ? (
                   <div className="text-center py-10 text-slate-400">
                     <CheckCircle size={32} className="mx-auto mb-2 text-green-400" />
@@ -524,7 +565,7 @@ export default function OrderImport() {
                 ) : (
                   <div className="space-y-1.5">
                     {results.notFound.map((item, i) => (
-                      <div key={i} className="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-lg">
+                      <div key={i} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-3 py-2 bg-slate-50 rounded-lg">
                         <div className="flex items-start gap-2 min-w-0">
                           <AlertCircle size={14} className="text-slate-400 shrink-0 mt-1" />
                           <div className="min-w-0">
@@ -532,13 +573,84 @@ export default function OrderImport() {
                             <p className="text-xs text-slate-500 font-mono break-all">ERP SKU: {item.erpSku || '-'}</p>
                           </div>
                         </div>
-                        <span className="text-sm text-slate-400 whitespace-nowrap ml-3">{item.qty}</span>
+                        <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pl-6 sm:pl-0">
+                          <span className="text-sm text-slate-500 whitespace-nowrap">ยอดรวม {item.qty}</span>
+                          <button
+                            type="button"
+                            onClick={() => openMapping(item)}
+                            className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-medium rounded-lg hover:border-red-300 hover:text-red-600 transition-colors"
+                          >
+                            <Link2 size={14} /> จับคู่สินค้า
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
                 )}
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {mappingItem && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">จับคู่กับสินค้าใน Stock</h2>
+                <p className="text-xs text-slate-500 mt-1">บันทึกครั้งเดียว ระบบจะจำ ERP SKU นี้ตลอดไป</p>
+              </div>
+              <button type="button" onClick={() => setMappingItem(null)} aria-label="ปิด">
+                <X size={20} className="text-slate-400" />
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 p-3">
+              <p className="text-sm font-medium text-slate-800">{mappingItem.name}</p>
+              <p className="text-xs text-slate-500 font-mono mt-1">ERP SKU: {mappingItem.erpSku}</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">เลือกสินค้าที่ตรงกันใน Stock</label>
+              <select
+                value={mappingProductId}
+                onChange={event => setMappingProductId(event.target.value)}
+                className="w-full px-3 py-3 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
+              >
+                <option value="">-- เลือกสินค้า --</option>
+                {stockProducts.filter(product => !product.erp_sku).map(product => (
+                  <option key={product.id} value={product.id}>
+                    {product.name} — {product.product_code || product.barcode}
+                  </option>
+                ))}
+              </select>
+              {stockProducts.filter(product => !product.erp_sku).length === 0 && (
+                <p className="text-xs text-amber-700 mt-2">ยังไม่มีสินค้าว่างสำหรับจับคู่ กรุณาเพิ่มสินค้าในหน้า “จัดการสินค้า” ก่อน</p>
+              )}
+            </div>
+
+            {mappingError && (
+              <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{mappingError}</div>
+            )}
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setMappingItem(null)}
+                className="flex-1 py-3 border border-slate-200 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={saveMapping}
+                disabled={!mappingProductId || savingMapping}
+                className="flex-1 py-3 bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white rounded-xl text-sm font-semibold transition-colors"
+              >
+                {savingMapping ? 'กำลังบันทึก...' : 'บันทึกการจับคู่'}
+              </button>
+            </div>
           </div>
         </div>
       )}

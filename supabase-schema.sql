@@ -16,6 +16,7 @@ create table profiles (
 create table products (
   id uuid default gen_random_uuid() primary key,
   barcode text not null unique,
+  erp_sku text unique,
   name text not null,
   unit text not null default 'ชิ้น',
   current_stock int not null default 0,

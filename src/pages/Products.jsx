@@ -4,7 +4,7 @@ import { Html5Qrcode } from 'html5-qrcode'
 import JsBarcode from 'jsbarcode'
 import { supabase } from '../lib/supabase'
 
-const emptyForm = { name: '', barcode: '', unit: 'ชิ้น', min_stock: 0, product_code: '' }
+const emptyForm = { name: '', barcode: '', unit: 'ชิ้น', min_stock: 0, product_code: '', erp_sku: '' }
 
 export default function Products() {
   const [products, setProducts] = useState([])
@@ -36,7 +36,14 @@ export default function Products() {
   }
 
   function openEdit(p) {
-    setForm({ name: p.name, barcode: p.barcode, unit: p.unit, min_stock: p.min_stock, product_code: p.product_code || '' })
+    setForm({
+      name: p.name,
+      barcode: p.barcode,
+      unit: p.unit,
+      min_stock: p.min_stock,
+      product_code: p.product_code || '',
+      erp_sku: p.erp_sku || '',
+    })
     setEditId(p.id)
     setModal(true)
   }
@@ -46,8 +53,10 @@ export default function Products() {
     setSaving(true)
 
     try {
+      const payload = { ...form, erp_sku: form.erp_sku.trim() || null }
       if (editId) {
-        await supabase.from('products').update(form).eq('id', editId)
+        const { error } = await supabase.from('products').update(payload).eq('id', editId)
+        if (error) throw error
       } else {
         // Generate SKU: SMM-YYMMDDNNNNN
         const now = new Date()
@@ -70,11 +79,12 @@ export default function Products() {
 
         const productCode = form.product_code.trim() || `SMM-${dateStr}${String(nextNumber).padStart(5, '0')}`
 
-        await supabase.from('products').insert({
-          ...form,
+        const { error } = await supabase.from('products').insert({
+          ...payload,
           current_stock: 0,
           product_code: productCode
         })
+        if (error) throw error
       }
       setSaving(false)
       setModal(false)
@@ -161,7 +171,9 @@ export default function Products() {
 
   const filtered = products.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
-    p.barcode.includes(search)
+    p.barcode.includes(search) ||
+    (p.product_code || '').toLowerCase().includes(search.toLowerCase()) ||
+    (p.erp_sku || '').toLowerCase().includes(search.toLowerCase())
   )
 
   return (
@@ -181,7 +193,7 @@ export default function Products() {
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="ค้นหาชื่อหรือบาร์โค้ด..."
+          placeholder="ค้นหาชื่อ บาร์โค้ด SKU หรือ ERP SKU..."
           className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
         />
       </div>
@@ -205,6 +217,9 @@ export default function Products() {
                     )}
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5">{p.barcode} · หน่วย: {p.unit}</p>
+                  {p.erp_sku && (
+                    <p className="text-xs text-emerald-600 font-mono mt-0.5">ERP SKU: {p.erp_sku}</p>
+                  )}
                 </div>
                 <div className="text-right shrink-0">
                   <p className={`text-sm font-semibold ${p.current_stock <= p.min_stock ? 'text-red-600' : 'text-slate-800'}`}>
@@ -258,6 +273,21 @@ export default function Products() {
                 />
               </div>
             )}
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                ERP SKU <span className="text-slate-400 font-normal">(รหัสจากคอลัมน์ E)</span>
+              </label>
+              <input
+                type="text"
+                value={form.erp_sku}
+                onChange={e => setForm(f => ({ ...f, erp_sku: e.target.value.trim() }))}
+                placeholder="เช่น 03002340002161600"
+                inputMode="numeric"
+                className="w-full px-3 py-3 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">ใช้เชื่อมรายการจาก ERP กับสินค้าใน Stock</p>
+            </div>
 
             {[
               { label: 'ชื่อสินค้า', key: 'name', type: 'text', placeholder: 'เช่น น้ำดื่ม 600ml' },
