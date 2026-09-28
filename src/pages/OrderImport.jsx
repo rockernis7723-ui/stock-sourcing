@@ -3,12 +3,125 @@ import { Upload, Download, ShoppingCart, Package2, AlertCircle, FileSpreadsheet,
 import * as XLSX from 'xlsx'
 import { supabase } from '../lib/supabase'
 
+
+const ERP_HEADERS = [
+  'document_no', 'doc_date', 'customer_name', 'master_sku_name',
+  'master_sku_product_code', 'qty', 'assign_name', 'notes',
+]
+
+function normalize(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function numberValue(value) {
+  const result = Number(String(value ?? '').replace(/,/g, '').trim())
+  return Number.isFinite(result) ? result : 0
+}
+
+function parseCsv(text) {
+  const rows = []
+  let row = []
+  let field = ''
+  let quoted = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    const next = text[index + 1]
+    if (char === '"') {
+      if (quoted && next === '"') {
+        field += '"'
+        index += 1
+      } else {
+        quoted = !quoted
+      }
+    } else if (char === ',' && !quoted) {
+      row.push(field)
+      field = ''
+    } else if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && next === '\n') index += 1
+      row.push(field)
+      if (row.some(cell => String(cell).trim())) rows.push(row)
+      row = []
+      field = ''
+    } else {
+      field += char
+    }
+  }
+  if (field || row.length) {
+    row.push(field)
+    if (row.some(cell => String(cell).trim())) rows.push(row)
+  }
+  if (rows[0]?.[0]) rows[0][0] = String(rows[0][0]).replace(/^\uFEFF/, '')
+  return rows
+}
+
+function parseErpCsv(rows) {
+  const headers = (rows[0] || []).map(normalize)
+  const indexes = Object.fromEntries(ERP_HEADERS.map(header => [header, headers.indexOf(header)]))
+  if (indexes.master_sku_name < 0 || indexes.master_sku_product_code < 0 || indexes.qty < 0) return null
+
+  const grouped = new Map()
+  const dates = new Set()
+  const documents = new Set()
+  let merRows = 0
+  let invalidSkuCount = 0
+  for (const row of rows.slice(1)) {
+    const team = indexes.assign_name >= 0 ? String(row[indexes.assign_name] ?? '').trim().toUpperCase() : ''
+    if (team !== 'MER') continue
+
+    const name = String(row[indexes.master_sku_name] ?? '').trim()
+    const rawErpSku = row[indexes.master_sku_product_code]
+    const erpSku = String(rawErpSku ?? '').trim()
+    const qty = numberValue(row[indexes.qty])
+    if ((!name && !erpSku) || qty <= 0) continue
+    merRows += 1
+
+    if (typeof rawErpSku === 'number' || /e[+-]\d+/i.test(erpSku)) {
+      invalidSkuCount += 1
+      continue
+    }
+
+    const documentNo = indexes.document_no >= 0 ? String(row[indexes.document_no] ?? '').trim() : ''
+    const docDate = indexes.doc_date >= 0 ? String(row[indexes.doc_date] ?? '').trim() : ''
+    const customer = indexes.customer_name >= 0 ? String(row[indexes.customer_name] ?? '').trim() : ''
+    const key = erpSku || normalize(name)
+    const current = grouped.get(key) || {
+      name, erpSku, qty: 0, documents: new Set(), customers: new Set(),
+    }
+    current.qty += qty
+    if (documentNo) {
+      current.documents.add(documentNo)
+      documents.add(documentNo)
+    }
+    if (customer) current.customers.add(customer)
+    if (docDate) dates.add(docDate)
+    grouped.set(key, current)
+  }
+
+  if (invalidSkuCount > 0) {
+    throw new Error(`พบ SKU คอลัมน์ E จำนวน ${invalidSkuCount} รายการเป็นเลขแบบย่อ เช่น 3.00234E+15 กรุณาใช้ไฟล์ CSV ต้นฉบับจาก ERP โดยไม่เปิดแล้วบันทึกซ้ำใน Excel`)
+  }
+
+  return {
+    orderItems: Array.from(grouped.values()).map(item => ({
+      ...item,
+      documents: Array.from(item.documents),
+      customers: Array.from(item.customers),
+    })),
+    importDate: Array.from(dates).join(' ถึง '),
+    sourceRows: merRows,
+    totalSourceRows: Math.max(rows.length - 1, 0),
+    documentCount: documents.size,
+  }
+}
+
 export default function OrderImport() {
   const [file, setFile] = useState(null)
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState(null)
   const [importDate, setImportDate] = useState('')
   const [activeTab, setActiveTab] = useState('buy')
+  const [errorMessage, setErrorMessage] = useState('')
   const fileInputRef = useRef(null)
 
   function handleFileChange(e) {
@@ -16,123 +129,165 @@ export default function OrderImport() {
     if (!f) return
     setFile(f)
     setResults(null)
+    setErrorMessage('')
   }
 
   function clearFile() {
     setFile(null)
     setResults(null)
+    setImportDate('')
+    setErrorMessage('')
     if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  async function readOrderFile() {
+    if (file.name.toLowerCase().endsWith('.csv')) {
+      const text = await file.text()
+      const parsed = parseErpCsv(parseCsv(text))
+      if (!parsed) throw new Error('ไม่พบคอลัมน์ SKU และจำนวนที่ต้องใช้ในไฟล์ CSV')
+      return parsed
+    }
+
+    const buffer = await file.arrayBuffer()
+    const wb = XLSX.read(buffer, { type: 'array' })
+    const ws = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true })
+    const erpFile = parseErpCsv(rows)
+    if (erpFile) return erpFile
+
+    const orderItems = []
+    for (let index = 4; index < rows.length; index += 1) {
+      const row = rows[index]
+      const name = String(row[0] || '').trim()
+      const qty = numberValue(row[1])
+      if (name && qty > 0 && (typeof row[1] === 'number' || /^\d+(\.\d+)?$/.test(String(row[1]).trim()))) {
+        orderItems.push({ name, erpSku: '', qty, documents: [], customers: [] })
+      }
+    }
+    return {
+      orderItems,
+      importDate: rows[0]?.[1] ? String(rows[0][1]) : '',
+      sourceRows: rows.length,
+      documentCount: 0,
+    }
   }
 
   async function handleAnalyze() {
     if (!file) return
     setLoading(true)
+    setErrorMessage('')
 
     try {
-      const buffer = await file.arrayBuffer()
-      const wb = XLSX.read(buffer)
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+      const parsed = await readOrderFile()
+      if (!parsed.orderItems.length) throw new Error('ไม่พบรายการสินค้าในไฟล์นี้')
+      setImportDate(parsed.importDate)
 
-      // Extract date from row 1 (index 0), col B (index 1)
-      const dateRaw = rows[0]?.[1]
-      setImportDate(dateRaw ? String(dateRaw) : '')
-
-      // Parse summary rows: col A = product name, col B = numeric total qty, col C = empty
-      const orderItems = []
-      for (let i = 4; i < rows.length; i++) {
-        const row = rows[i]
-        const name = String(row[0] || '').trim()
-        const colB = row[1]
-        if (!name) continue
-        if (typeof colB === 'number' && colB > 0) {
-          orderItems.push({ name, qty: colB })
-        }
-      }
-
-      // Fetch all products with stock lots
-      const { data: products } = await supabase
+      const { data: products, error } = await supabase
         .from('products')
-        .select('id, name, unit, product_code, min_stock, stock_lots(quantity)')
+        .select('id, name, unit, barcode, product_code, min_stock, stock_lots(quantity)')
         .order('name')
+      if (error) throw new Error(`อ่านข้อมูลสต็อกไม่ได้: ${error.message}`)
+
+      const byBarcode = new Map()
+      const byProductCode = new Map()
+      const byName = new Map()
+      for (const product of products || []) {
+        if (normalize(product.barcode)) byBarcode.set(normalize(product.barcode), product)
+        if (normalize(product.product_code)) byProductCode.set(normalize(product.product_code), product)
+        if (normalize(product.name)) byName.set(normalize(product.name), product)
+      }
 
       const toBuy = []
       const fromStock = []
       const notFound = []
 
-      for (const item of orderItems) {
-        const match = products?.find(
-          p => p.name.trim().toLowerCase() === item.name.toLowerCase()
-        )
+      for (const item of parsed.orderItems) {
+        const match =
+          (item.erpSku && byBarcode.get(normalize(item.erpSku))) ||
+          (item.erpSku && byProductCode.get(normalize(item.erpSku))) ||
+          byName.get(normalize(item.name))
 
         if (!match) {
-          notFound.push({ name: item.name, qty: item.qty })
+          notFound.push(item)
           continue
         }
 
         const currentStock = (match.stock_lots || []).reduce(
-          (sum, lot) => sum + (lot.quantity || 0),
-          0
+          (sum, lot) => sum + numberValue(lot.quantity),
+          0,
         )
-
-        if (currentStock >= item.qty) {
-          fromStock.push({
-            name: item.name,
-            orderedQty: item.qty,
-            currentStock,
-            unit: match.unit,
-            product_code: match.product_code || '',
-          })
-        } else {
-          toBuy.push({
-            name: item.name,
-            orderedQty: item.qty,
-            currentStock,
-            needToBuy: item.qty - currentStock,
-            unit: match.unit,
-            product_code: match.product_code || '',
-          })
+        const pickQty = Math.min(currentStock, item.qty)
+        const buyQty = Math.max(item.qty - currentStock, 0)
+        const common = {
+          ...item,
+          orderedQty: item.qty,
+          currentStock,
+          unit: match.unit || 'ชิ้น',
+          product_code: match.product_code || '',
+          barcode: match.barcode || '',
         }
+
+        if (pickQty > 0) fromStock.push({ ...common, pickQty })
+        if (buyQty > 0) toBuy.push({ ...common, needToBuy: buyQty })
       }
 
-      setResults({ toBuy, fromStock, notFound })
-      setActiveTab(toBuy.length > 0 ? 'buy' : 'stock')
+      setResults({
+        toBuy,
+        fromStock,
+        notFound,
+        sourceRows: parsed.sourceRows,
+        totalSourceRows: parsed.totalSourceRows ?? parsed.sourceRows,
+        documentCount: parsed.documentCount,
+        skuCount: parsed.orderItems.length,
+      })
+      setActiveTab(toBuy.length > 0 ? 'buy' : fromStock.length > 0 ? 'stock' : 'notfound')
+    } catch (error) {
+      setResults(null)
+      setErrorMessage(error.message || 'อ่านไฟล์ไม่สำเร็จ กรุณาตรวจรูปแบบไฟล์แล้วลองใหม่')
     } finally {
       setLoading(false)
     }
   }
 
+  function createWorkbook(rows, sheetName, fileName) {
+    const ws = XLSX.utils.json_to_sheet(rows)
+    ws['!cols'] = [
+      { wch: 20 }, { wch: 20 }, { wch: 45 }, { wch: 12 },
+      { wch: 16 }, { wch: 18 }, { wch: 10 }, { wch: 14 }, { wch: 35 },
+    ]
+    const wbOut = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wbOut, ws, sheetName)
+    XLSX.writeFile(wbOut, fileName)
+  }
+
   function exportToBuy() {
     if (!results?.toBuy.length) return
-    const rows = results.toBuy.map(item => ({
-      'รหัสสินค้า (SKU)': item.product_code,
+    createWorkbook(results.toBuy.map(item => ({
+      'SKU จาก ERP': item.erpSku,
+      'รหัสสินค้าใน Stock': item.product_code,
       'ชื่อสินค้า': item.name,
-      'ยอดสั่ง': item.orderedQty,
+      'ยอดสั่งรวม': item.orderedQty,
       'สต็อกปัจจุบัน': item.currentStock,
-      'ต้องซื้อเพิ่ม': item.needToBuy,
+      'จำนวนที่ต้องซื้อเพิ่ม': item.needToBuy,
       'หน่วย': item.unit,
-    }))
-    const ws = XLSX.utils.json_to_sheet(rows)
-    ws['!cols'] = [{ wch: 18 }, { wch: 45 }, { wch: 10 }, { wch: 16 }, { wch: 12 }, { wch: 8 }]
-    const wbOut = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wbOut, ws, 'ควรซื้อเพิ่ม')
-    XLSX.writeFile(wbOut, `ควรซื้อเพิ่ม_${importDate || 'export'}.xlsx`)
+      'จำนวน Order': item.documents?.length || '',
+      'ลูกค้า': item.customers?.join(', ') || '',
+    })), 'MER ซื้อเพิ่ม', `MER_รายการซื้อเพิ่ม_${importDate || 'export'}.xlsx`)
   }
 
   function exportFromStock() {
     if (!results?.fromStock.length) return
-    const rows = results.fromStock.map(item => ({
-      'รหัสสินค้า (SKU)': item.product_code,
+    createWorkbook(results.fromStock.map(item => ({
+      'SKU จาก ERP': item.erpSku,
+      'รหัสสินค้าใน Stock': item.product_code,
       'ชื่อสินค้า': item.name,
-      'ยอดสั่ง': item.orderedQty,
+      'ยอดสั่งรวม': item.orderedQty,
       'สต็อกปัจจุบัน': item.currentStock,
+      'จำนวนที่ให้หยิบ': item.pickQty,
       'หน่วย': item.unit,
-    }))
-    const ws = XLSX.utils.json_to_sheet(rows)
-    ws['!cols'] = [{ wch: 18 }, { wch: 45 }, { wch: 10 }, { wch: 16 }, { wch: 8 }]
-    const wbOut = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wbOut, ws, 'หยิบจาก Stock')
-    XLSX.writeFile(wbOut, `หยิบจากStock_${importDate || 'export'}.xlsx`)
+      'จำนวน Order': item.documents?.length || '',
+      'ลูกค้า': item.customers?.join(', ') || '',
+    })), 'MER หยิบจาก Stock', `MER_หยิบจากStock_${importDate || 'export'}.xlsx`)
   }
 
   const tabs = [
@@ -145,12 +300,13 @@ export default function OrderImport() {
     <div className="max-w-5xl mx-auto space-y-5">
       <div>
         <h1 className="text-xl font-bold text-slate-800">นำเข้าคำสั่งซื้อ ERP</h1>
-        <p className="text-sm text-slate-500 mt-0.5">วิเคราะห์รายการสั่งซื้อจากไฟล์ Excel แล้วแยกว่าควรซื้อเพิ่มหรือหยิบจาก Stock</p>
+        <p className="text-sm text-slate-500 mt-0.5">วิเคราะห์คำสั่งซื้อของทีม MER แล้วแยกว่าควรซื้อเพิ่มหรือหยิบจาก Stock</p>
       </div>
 
       {/* Upload card */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-        <p className="text-sm font-medium text-slate-700 mb-3">อัปโหลดไฟล์ Export by Buyer จาก ERP</p>
+        <p className="text-sm font-medium text-slate-700 mb-1">อัปโหลดไฟล์ Export by Buyer จาก ERP</p>
+        <p className="text-xs text-slate-500 mb-3">อ่านคอลัมน์ E: master_sku_product_code และเลือกเฉพาะ assign_name = MER</p>
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="flex-1">
             {file ? (
@@ -164,11 +320,11 @@ export default function OrderImport() {
             ) : (
               <label className="flex items-center gap-2 px-3 py-2 border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:border-red-400 hover:bg-red-50 transition-colors">
                 <Upload size={16} className="text-slate-400" />
-                <span className="text-sm text-slate-500">เลือกไฟล์ .xlsx</span>
+                <span className="text-sm text-slate-500">เลือกไฟล์ต้นฉบับ .csv, .xlsx หรือ .xls</span>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".xlsx,.xls"
+                  accept=".csv,.xlsx,.xls"
                   onChange={handleFileChange}
                   className="hidden"
                 />
@@ -180,11 +336,25 @@ export default function OrderImport() {
             disabled={!file || loading}
             className="px-5 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {loading ? 'กำลังวิเคราะห์...' : 'วิเคราะห์'}
+            {loading ? 'กำลังวิเคราะห์...' : 'วิเคราะห์ไฟล์'}
           </button>
         </div>
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          แนะนำไฟล์ CSV ต้นฉบับจาก ERP เพื่อรักษา SKU ให้ครบทุกหลัก ห้ามเปิดแล้วบันทึกซ้ำใน Excel หากคอลัมน์ E แสดงเป็น 3.00234E+15
+        </div>
+        {errorMessage && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
         {importDate && results && (
-          <p className="text-xs text-slate-400 mt-2">วันที่ในไฟล์: {importDate}</p>
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+            <span>วันที่ในไฟล์: {importDate}</span>
+            <span>ทีม MER {results.sourceRows.toLocaleString('th-TH')} จาก {results.totalSourceRows.toLocaleString('th-TH')} บรรทัด</span>
+            <span>{results.documentCount.toLocaleString('th-TH')} Order</span>
+            <span>{results.skuCount.toLocaleString('th-TH')} SKU หลังรวมยอด</span>
+          </div>
         )}
       </div>
 
@@ -208,12 +378,12 @@ export default function OrderImport() {
           </div>
 
           {/* Tabs */}
-          <div className="flex border-b border-slate-100">
+          <div className="flex overflow-x-auto border-b border-slate-100">
             {tabs.map(tab => (
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
-                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
                   activeTab === tab.key
                     ? tab.color === 'red'
                       ? 'border-red-500 text-red-600'
@@ -274,8 +444,9 @@ export default function OrderImport() {
                           <tr key={i} className="hover:bg-slate-50">
                             <td className="py-2.5 pr-3">
                               <p className="text-slate-800 font-medium leading-snug">{item.name}</p>
+                              <p className="text-xs text-slate-500 font-mono mt-0.5">ERP SKU: {item.erpSku || '-'}</p>
                               {item.product_code && (
-                                <p className="text-xs text-slate-400 font-mono mt-0.5">{item.product_code}</p>
+                                <p className="text-xs text-slate-400 font-mono">Stock: {item.product_code}</p>
                               )}
                             </td>
                             <td className="py-2.5 px-3 text-right text-slate-600 whitespace-nowrap">{item.orderedQty} {item.unit}</td>
@@ -293,7 +464,7 @@ export default function OrderImport() {
             {activeTab === 'stock' && (
               <>
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-sm text-slate-500">สินค้าที่มีสต็อกเพียงพอ หยิบจัดได้เลย</p>
+                  <p className="text-sm text-slate-500">หยิบจาก Stock เท่าที่มี หากไม่พอ ระบบจะแยกส่วนที่ขาดไปอยู่รายการซื้อเพิ่ม</p>
                   {results.fromStock.length > 0 && (
                     <button
                       onClick={exportFromStock}
@@ -316,7 +487,8 @@ export default function OrderImport() {
                         <tr className="border-b border-slate-100">
                           <th className="text-left pb-2 pr-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">ชื่อสินค้า</th>
                           <th className="text-right pb-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">ยอดสั่ง</th>
-                          <th className="text-right pb-2 pl-3 text-xs font-semibold text-green-600 uppercase tracking-wide whitespace-nowrap">สต็อกปัจจุบัน</th>
+                          <th className="text-right pb-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">สต็อกปัจจุบัน</th>
+                          <th className="text-right pb-2 pl-3 text-xs font-semibold text-green-600 uppercase tracking-wide whitespace-nowrap">ให้หยิบ</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
@@ -324,12 +496,14 @@ export default function OrderImport() {
                           <tr key={i} className="hover:bg-slate-50">
                             <td className="py-2.5 pr-3">
                               <p className="text-slate-800 font-medium leading-snug">{item.name}</p>
+                              <p className="text-xs text-slate-500 font-mono mt-0.5">ERP SKU: {item.erpSku || '-'}</p>
                               {item.product_code && (
-                                <p className="text-xs text-slate-400 font-mono mt-0.5">{item.product_code}</p>
+                                <p className="text-xs text-slate-400 font-mono">Stock: {item.product_code}</p>
                               )}
                             </td>
                             <td className="py-2.5 px-3 text-right text-slate-600 whitespace-nowrap">{item.orderedQty} {item.unit}</td>
-                            <td className="py-2.5 pl-3 text-right font-bold text-green-600 whitespace-nowrap">{item.currentStock} {item.unit}</td>
+                            <td className="py-2.5 px-3 text-right text-slate-500 whitespace-nowrap">{item.currentStock} {item.unit}</td>
+                            <td className="py-2.5 pl-3 text-right font-bold text-green-600 whitespace-nowrap">{item.pickQty} {item.unit}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -341,7 +515,7 @@ export default function OrderImport() {
 
             {activeTab === 'notfound' && (
               <>
-                <p className="text-sm text-slate-500 mb-3">รายการที่ไม่พบในระบบ Stock (ชื่อไม่ตรงกัน)</p>
+                <p className="text-sm text-slate-500 mb-3">SKU ที่ยังจับคู่กับสินค้าในระบบ Stock ไม่ได้</p>
                 {results.notFound.length === 0 ? (
                   <div className="text-center py-10 text-slate-400">
                     <CheckCircle size={32} className="mx-auto mb-2 text-green-400" />
@@ -351,9 +525,12 @@ export default function OrderImport() {
                   <div className="space-y-1.5">
                     {results.notFound.map((item, i) => (
                       <div key={i} className="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-lg">
-                        <div className="flex items-center gap-2">
-                          <AlertCircle size={14} className="text-slate-400 shrink-0" />
-                          <span className="text-sm text-slate-600">{item.name}</span>
+                        <div className="flex items-start gap-2 min-w-0">
+                          <AlertCircle size={14} className="text-slate-400 shrink-0 mt-1" />
+                          <div className="min-w-0">
+                            <p className="text-sm text-slate-700">{item.name}</p>
+                            <p className="text-xs text-slate-500 font-mono break-all">ERP SKU: {item.erpSku || '-'}</p>
+                          </div>
                         </div>
                         <span className="text-sm text-slate-400 whitespace-nowrap ml-3">{item.qty}</span>
                       </div>
