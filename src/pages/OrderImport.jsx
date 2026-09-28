@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { Upload, Download, ShoppingCart, Package2, AlertCircle, FileSpreadsheet, X, CheckCircle, Link2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { supabase } from '../lib/supabase'
 
@@ -394,6 +395,43 @@ export default function OrderImport() {
             <span>{results.skuCount.toLocaleString('th-TH')} SKU หลังรวมยอด</span>
           </div>
         )}
+      </div>
+
+      {/* Matching guide */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-800">วิธีจับคู่สินค้า ERP กับ Stock</h2>
+            <p className="text-xs text-slate-500 mt-0.5">จับคู่สินค้าแต่ละรายการเพียงครั้งเดียว ระบบจะจำ ERP SKU ไว้ใช้ครั้งต่อไป</p>
+          </div>
+          <span className="px-2.5 py-1 rounded-full bg-green-50 text-green-700 text-xs font-medium">ทำครั้งแรกครั้งเดียว</span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {[
+            { number: 1, title: 'อัปโหลดและวิเคราะห์', text: 'เลือกไฟล์ CSV จาก ERP แล้วกด “วิเคราะห์ไฟล์”' },
+            { number: 2, title: 'เปิดรายการไม่พบ', text: 'กดแท็บ “ไม่พบในระบบ” เพื่อดู SKU ที่ยังไม่เชื่อม' },
+            { number: 3, title: 'กดจับคู่สินค้า', text: 'เลือกรายการ แล้วกดปุ่ม “จับคู่สินค้า” ด้านขวา' },
+            { number: 4, title: 'เลือกและบันทึก', text: 'เลือกสินค้าที่ตรงกันใน Stock แล้วกด “บันทึกการจับคู่”' },
+          ].map(step => (
+            <div key={step.number} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="w-7 h-7 rounded-full bg-red-600 text-white text-sm font-bold flex items-center justify-center mb-2">
+                {step.number}
+              </div>
+              <p className="text-sm font-semibold text-slate-800">{step.title}</p>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">{step.text}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+          <AlertCircle size={15} className="shrink-0 mt-0.5" />
+          <span>
+            หากยังไม่มีสินค้าที่ต้องการเลือก ให้เพิ่มสินค้าในหน้า{' '}
+            <Link to="/products" className="font-semibold underline underline-offset-2">จัดการสินค้า</Link>
+            {' '}ก่อน แล้วกลับมาวิเคราะห์ไฟล์อีกครั้ง
+          </span>
+        </div>
       </div>
 
       {/* Results */}
