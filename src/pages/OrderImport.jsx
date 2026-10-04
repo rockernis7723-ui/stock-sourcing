@@ -167,14 +167,11 @@ function parseMasterSkuRows(rows) {
     }
   }
 
-  if (invalidSkuCount > 0) {
-    throw new Error(`พบ Product Code ที่ไม่สมบูรณ์ ${invalidSkuCount.toLocaleString('th-TH')} รายการ กรุณาใช้ไฟล์ CSV ต้นฉบับจาก ERP`)
-  }
-
   return {
     records: Array.from(records.values()),
     totalRows: nonBlankRows,
-    duplicateRows: Math.max(nonBlankRows - records.size, 0),
+    duplicateRows: Math.max(nonBlankRows - invalidSkuCount - records.size, 0),
+    invalidSkuCount,
   }
 }
 
@@ -276,21 +273,20 @@ export default function OrderImport() {
       }
 
       const existingBySku = new Map(existingMappings.map(row => [normalize(row.erp_sku), row.product_id]))
+      const newRecords = parsed.records.filter(record => !existingBySku.has(normalize(record.erp_sku)))
+      const skippedExisting = parsed.records.length - newRecords.length
       let autoMatched = 0
-      let alreadyMatched = 0
       const productPrimarySkuUpdates = new Map()
 
-      const payload = parsed.records.map(record => {
-        const existingProductId = existingBySku.get(normalize(record.erp_sku)) || null
+      const payload = newRecords.map(record => {
         let matchedProduct = productByCode.get(normalize(record.erp_sku)) || null
         if (!matchedProduct && record.name) {
           const sameNameProducts = productsByName.get(normalize(record.name)) || []
           if (sameNameProducts.length === 1) matchedProduct = sameNameProducts[0]
         }
 
-        const productId = existingProductId || matchedProduct?.id || null
-        if (existingProductId) alreadyMatched += 1
-        else if (matchedProduct) {
+        const productId = matchedProduct?.id || null
+        if (matchedProduct) {
           autoMatched += 1
           if (!matchedProduct.erp_sku && !productPrimarySkuUpdates.has(matchedProduct.id)) {
             productPrimarySkuUpdates.set(matchedProduct.id, record.erp_sku)
@@ -303,7 +299,10 @@ export default function OrderImport() {
       for (let index = 0; index < payload.length; index += batchSize) {
         const { error } = await supabase
           .from('erp_master_skus')
-          .upsert(payload.slice(index, index + batchSize), { onConflict: 'erp_sku' })
+          .upsert(payload.slice(index, index + batchSize), {
+            onConflict: 'erp_sku',
+            ignoreDuplicates: true,
+          })
         if (error) throw error
       }
 
@@ -318,10 +317,11 @@ export default function OrderImport() {
 
       setMasterImportResult({
         imported: payload.length,
+        skippedExisting,
         duplicateRows: parsed.duplicateRows,
+        invalidSkuCount: parsed.invalidSkuCount,
         autoMatched,
-        alreadyMatched,
-        waiting: payload.length - autoMatched - alreadyMatched,
+        waiting: payload.length - autoMatched,
       })
     } catch (error) {
       const missingTable = error.code === '42P01' || /erp_master_skus|schema cache/i.test(error.message || '')
@@ -677,13 +677,16 @@ export default function OrderImport() {
               <CheckCircle size={17} /> นำเข้าทะเบียน ERP สำเร็จ
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-center">
-              <div><p className="text-lg font-bold text-slate-800">{masterImportResult.imported.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">ERP SKU ไม่ซ้ำ</p></div>
-              <div><p className="text-lg font-bold text-green-600">{masterImportResult.autoMatched.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">จับคู่อัตโนมัติใหม่</p></div>
-              <div><p className="text-lg font-bold text-blue-600">{masterImportResult.alreadyMatched.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">เคยจับคู่แล้ว</p></div>
+              <div><p className="text-lg font-bold text-slate-800">{masterImportResult.imported.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">เพิ่มใหม่</p></div>
+              <div><p className="text-lg font-bold text-blue-600">{masterImportResult.skippedExisting.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">มีอยู่แล้ว (ข้าม)</p></div>
+              <div><p className="text-lg font-bold text-green-600">{masterImportResult.autoMatched.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">จับคู่อัตโนมัติ</p></div>
               <div><p className="text-lg font-bold text-amber-600">{masterImportResult.waiting.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">รอจับคู่</p></div>
             </div>
             {masterImportResult.duplicateRows > 0 && (
               <p className="text-xs text-slate-500 mt-2 text-center">รวมรายการซ้ำในไฟล์แล้ว {masterImportResult.duplicateRows.toLocaleString('th-TH')} แถว</p>
+            )}
+            {masterImportResult.invalidSkuCount > 0 && (
+              <p className="text-xs text-amber-700 mt-1 text-center">ข้าม Product Code ที่ไม่สมบูรณ์ {masterImportResult.invalidSkuCount.toLocaleString('th-TH')} รายการ</p>
             )}
           </div>
         )}
