@@ -1,6 +1,5 @@
 import { useState, useRef } from 'react'
-import { Upload, Download, ShoppingCart, Package2, AlertCircle, FileSpreadsheet, X, CheckCircle, Link2, Database } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Upload, Download, ShoppingCart, Package2, AlertCircle, FileSpreadsheet, X, CheckCircle, Link2, Database, CircleHelp, ChevronDown } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../lib/supabase'
 
@@ -211,6 +210,7 @@ async function fetchMappingsForSkus(skus) {
 }
 
 export default function OrderImport() {
+  const [showGuide, setShowGuide] = useState(false)
   const [masterFile, setMasterFile] = useState(null)
   const [masterImporting, setMasterImporting] = useState(false)
   const [masterImportError, setMasterImportError] = useState('')
@@ -572,10 +572,47 @@ export default function OrderImport() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-slate-800">นำเข้าคำสั่งซื้อ ERP</h1>
-        <p className="text-sm text-slate-500 mt-0.5">วิเคราะห์คำสั่งซื้อของทีม MER แล้วแยกว่าควรซื้อเพิ่มหรือหยิบจาก Stock</p>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-slate-800">นำเข้าคำสั่งซื้อ ERP</h1>
+          <p className="text-sm text-slate-500 mt-0.5">วิเคราะห์คำสั่งซื้อของทีม MER แล้วแยกว่าควรซื้อเพิ่มหรือหยิบจาก Stock</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowGuide(value => !value)}
+          className="flex items-center justify-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:border-red-300 hover:text-red-600 transition-colors shrink-0"
+          aria-expanded={showGuide}
+        >
+          <CircleHelp size={17} /> วิธีใช้งาน
+          <ChevronDown size={15} className={`transition-transform ${showGuide ? 'rotate-180' : ''}`} />
+        </button>
       </div>
+
+      {showGuide && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {[
+              { number: 1, title: 'นำเข้า Master SKU', text: 'เลือก master-skus-export.csv แล้วกดนำเข้า ทำครั้งแรกหรือเมื่อมีสินค้าใหม่' },
+              { number: 2, title: 'วิเคราะห์คำสั่งซื้อ', text: 'เลือกไฟล์ Export by Buyer แล้วกดวิเคราะห์ไฟล์' },
+              { number: 3, title: 'ตรวจและ Export', text: 'ตรวจซื้อเพิ่ม หยิบจาก Stock และดาวน์โหลด Excel' },
+            ].map(step => (
+              <div key={step.number} className="flex items-start gap-3 rounded-lg bg-slate-50 p-3">
+                <div className="w-7 h-7 rounded-full bg-red-600 text-white text-sm font-bold flex items-center justify-center shrink-0">
+                  {step.number}
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">{step.title}</p>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">{step.text}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+            <AlertCircle size={15} className="shrink-0 mt-0.5" />
+            <span>หากพบรายการ “ไม่พบในระบบ” ให้กด “จับคู่สินค้า” แล้วเลือกสินค้าที่ตรงกัน ระบบจะจำไว้ใช้ครั้งต่อไป</span>
+          </div>
+        </div>
+      )}
 
       {/* Master SKU registry */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
@@ -705,43 +742,6 @@ export default function OrderImport() {
             <span>{results.skuCount.toLocaleString('th-TH')} SKU หลังรวมยอด</span>
           </div>
         )}
-      </div>
-
-      {/* Matching guide */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-          <div>
-            <h2 className="text-base font-bold text-slate-800">วิธีจับคู่สินค้า ERP กับ Stock</h2>
-            <p className="text-xs text-slate-500 mt-0.5">นำเข้าทะเบียน Master SKU ก่อน ระบบจะจับคู่จากรหัสและชื่อสินค้าให้อัตโนมัติ</p>
-          </div>
-          <span className="px-2.5 py-1 rounded-full bg-green-50 text-green-700 text-xs font-medium">ทำครั้งแรกครั้งเดียว</span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {[
-            { number: 1, title: 'นำเข้า Master SKU', text: 'เลือก master-skus-export.csv แล้วกด “นำเข้า Master SKU”' },
-            { number: 2, title: 'วิเคราะห์คำสั่งซื้อ', text: 'อัปโหลด Export by Buyer ระบบจะจับคู่ให้อัตโนมัติ' },
-            { number: 3, title: 'ตรวจรายการไม่พบ', text: 'เปิดแท็บ “ไม่พบในระบบ” เฉพาะรายการที่ยังไม่ตรง' },
-            { number: 4, title: 'จับคู่ส่วนที่เหลือ', text: 'เลือกสินค้า Stock แล้วบันทึกครั้งเดียว ระบบจะจำไว้' },
-          ].map(step => (
-            <div key={step.number} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <div className="w-7 h-7 rounded-full bg-red-600 text-white text-sm font-bold flex items-center justify-center mb-2">
-                {step.number}
-              </div>
-              <p className="text-sm font-semibold text-slate-800">{step.title}</p>
-              <p className="text-xs text-slate-500 mt-1 leading-relaxed">{step.text}</p>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
-          <AlertCircle size={15} className="shrink-0 mt-0.5" />
-          <span>
-            หากยังไม่มีสินค้าที่ต้องการเลือก ให้เพิ่มสินค้าในหน้า{' '}
-            <Link to="/products" className="font-semibold underline underline-offset-2">จัดการสินค้า</Link>
-            {' '}ก่อน แล้วกลับมาวิเคราะห์ไฟล์อีกครั้ง
-          </span>
-        </div>
       </div>
 
       {/* Results */}
