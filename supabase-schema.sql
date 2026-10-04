@@ -24,7 +24,26 @@ create table products (
   created_at timestamptz default now()
 );
 
--- 3. Stock Lots (ล็อตสินค้าแต่ละล็อต สำหรับ FEFO)
+-- 3. ERP Master SKU Registry (ทะเบียน Product Code จาก ERP)
+create table erp_master_skus (
+  erp_sku text primary key,
+  name text not null default '',
+  group_name text,
+  category text,
+  item_type text,
+  pack_size text,
+  spec_1 text,
+  spec_2 text,
+  unit text,
+  supplier_name text,
+  product_id uuid references products on delete set null,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create index erp_master_skus_product_id_idx on erp_master_skus(product_id);
+
+-- 4. Stock Lots (ล็อตสินค้าแต่ละล็อต สำหรับ FEFO)
 create table stock_lots (
   id uuid default gen_random_uuid() primary key,
   product_id uuid references products on delete cascade not null,
@@ -33,7 +52,7 @@ create table stock_lots (
   created_at timestamptz default now()
 );
 
--- 4. Transactions (ประวัติรับเข้า/จ่ายออก)
+-- 5. Transactions (ประวัติรับเข้า/จ่ายออก)
 create table transactions (
   id uuid default gen_random_uuid() primary key,
   product_id uuid references products on delete cascade not null,
@@ -75,6 +94,7 @@ $$;
 -- ===================================================
 alter table profiles enable row level security;
 alter table products enable row level security;
+alter table erp_master_skus enable row level security;
 alter table stock_lots enable row level security;
 alter table transactions enable row level security;
 
@@ -86,6 +106,11 @@ create policy "profiles_delete" on profiles for delete using (auth.role() = 'aut
 
 -- Products: ทุก user ที่ login แล้วเข้าถึงได้
 create policy "products_all" on products for all using (auth.role() = 'authenticated');
+
+-- ERP Master SKU: ทุก user ที่ login แล้วอ่านได้ และหน้า Admin/Manager เป็นผู้จัดการข้อมูล
+create policy "erp_master_skus_all" on erp_master_skus for all
+  using (auth.role() = 'authenticated')
+  with check (auth.role() = 'authenticated');
 
 -- Stock lots: ทุก user ที่ login แล้วเข้าถึงได้
 create policy "stock_lots_all" on stock_lots for all using (auth.role() = 'authenticated');

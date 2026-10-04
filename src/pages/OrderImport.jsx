@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Upload, Download, ShoppingCart, Package2, AlertCircle, FileSpreadsheet, X, CheckCircle, Link2 } from 'lucide-react'
+import { Upload, Download, ShoppingCart, Package2, AlertCircle, FileSpreadsheet, X, CheckCircle, Link2, Database } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { supabase } from '../lib/supabase'
@@ -8,6 +8,11 @@ import { supabase } from '../lib/supabase'
 const ERP_HEADERS = [
   'document_no', 'doc_date', 'customer_name', 'master_sku_name',
   'master_sku_product_code', 'qty', 'assign_name', 'notes',
+]
+
+const MASTER_SKU_HEADERS = [
+  'master_sku_product_code', 'master_sku_name', 'group', 'category', 'type',
+  'pack_size', 'spec_1', 'spec_2', 'unit', 'supplier_name',
 ]
 
 function normalize(value) {
@@ -116,7 +121,100 @@ function parseErpCsv(rows) {
   }
 }
 
+function parseMasterSkuRows(rows) {
+  const headers = (rows[0] || []).map(normalize)
+  const indexes = Object.fromEntries(MASTER_SKU_HEADERS.map(header => [header, headers.indexOf(header)]))
+  if (indexes.master_sku_product_code < 0) {
+    throw new Error('ไม่พบคอลัมน์ A: master_sku_product_code ในไฟล์ Master SKU')
+  }
+
+  const records = new Map()
+  let invalidSkuCount = 0
+  let nonBlankRows = 0
+
+  for (const row of rows.slice(1)) {
+    const rawCode = row[indexes.master_sku_product_code]
+    const erpSku = String(rawCode ?? '').trim()
+    if (!erpSku) continue
+    nonBlankRows += 1
+
+    if (typeof rawCode === 'number' || /e[+-]\d+/i.test(erpSku) || !/^\d+$/.test(erpSku)) {
+      invalidSkuCount += 1
+      continue
+    }
+
+    const value = key => indexes[key] >= 0 ? String(row[indexes[key]] ?? '').trim() : ''
+    const incoming = {
+      erp_sku: erpSku,
+      name: value('master_sku_name'),
+      group_name: value('group'),
+      category: value('category'),
+      item_type: value('type'),
+      pack_size: value('pack_size'),
+      spec_1: value('spec_1'),
+      spec_2: value('spec_2'),
+      unit: value('unit'),
+      supplier_name: value('supplier_name'),
+      updated_at: new Date().toISOString(),
+    }
+
+    const current = records.get(erpSku)
+    if (!current) {
+      records.set(erpSku, incoming)
+    } else {
+      for (const [key, fieldValue] of Object.entries(incoming)) {
+        if (!current[key] && fieldValue) current[key] = fieldValue
+      }
+    }
+  }
+
+  if (invalidSkuCount > 0) {
+    throw new Error(`พบ Product Code ที่ไม่สมบูรณ์ ${invalidSkuCount.toLocaleString('th-TH')} รายการ กรุณาใช้ไฟล์ CSV ต้นฉบับจาก ERP`)
+  }
+
+  return {
+    records: Array.from(records.values()),
+    totalRows: nonBlankRows,
+    duplicateRows: Math.max(nonBlankRows - records.size, 0),
+  }
+}
+
+async function fetchAllMasterMappings() {
+  const allRows = []
+  const pageSize = 1000
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('erp_master_skus')
+      .select('erp_sku, product_id')
+      .range(from, from + pageSize - 1)
+    if (error) throw error
+    allRows.push(...(data || []))
+    if (!data || data.length < pageSize) break
+  }
+  return allRows
+}
+
+async function fetchMappingsForSkus(skus) {
+  const rows = []
+  const uniqueSkus = Array.from(new Set(skus.filter(Boolean)))
+  const chunkSize = 100
+  for (let index = 0; index < uniqueSkus.length; index += chunkSize) {
+    const chunk = uniqueSkus.slice(index, index + chunkSize)
+    const { data, error } = await supabase
+      .from('erp_master_skus')
+      .select('erp_sku, product_id')
+      .in('erp_sku', chunk)
+    if (error) throw error
+    rows.push(...(data || []))
+  }
+  return rows
+}
+
 export default function OrderImport() {
+  const [masterFile, setMasterFile] = useState(null)
+  const [masterImporting, setMasterImporting] = useState(false)
+  const [masterImportError, setMasterImportError] = useState('')
+  const [masterImportResult, setMasterImportResult] = useState(null)
   const [file, setFile] = useState(null)
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState(null)
@@ -128,7 +226,112 @@ export default function OrderImport() {
   const [mappingProductId, setMappingProductId] = useState('')
   const [mappingError, setMappingError] = useState('')
   const [savingMapping, setSavingMapping] = useState(false)
+  const masterFileInputRef = useRef(null)
   const fileInputRef = useRef(null)
+
+  function handleMasterFileChange(event) {
+    const selectedFile = event.target.files[0]
+    if (!selectedFile) return
+    setMasterFile(selectedFile)
+    setMasterImportError('')
+    setMasterImportResult(null)
+  }
+
+  function clearMasterFile() {
+    setMasterFile(null)
+    setMasterImportError('')
+    setMasterImportResult(null)
+    if (masterFileInputRef.current) masterFileInputRef.current.value = ''
+  }
+
+  async function importMasterSkus() {
+    if (!masterFile) return
+    setMasterImporting(true)
+    setMasterImportError('')
+    setMasterImportResult(null)
+
+    try {
+      if (!masterFile.name.toLowerCase().endsWith('.csv')) {
+        throw new Error('กรุณาใช้ไฟล์ master-skus-export.csv ต้นฉบับ เพื่อรักษาเลข 0 ด้านหน้า Product Code')
+      }
+      const rows = parseCsv(await masterFile.text())
+
+      const parsed = parseMasterSkuRows(rows)
+      if (!parsed.records.length) throw new Error('ไม่พบ Product Code สำหรับนำเข้า')
+
+      const [{ data: products, error: productError }, existingMappings] = await Promise.all([
+        supabase.from('products').select('id, name, barcode, product_code, erp_sku'),
+        fetchAllMasterMappings(),
+      ])
+      if (productError) throw productError
+
+      const productByCode = new Map()
+      const productsByName = new Map()
+      for (const product of products || []) {
+        for (const code of [product.erp_sku, product.barcode, product.product_code]) {
+          if (normalize(code)) productByCode.set(normalize(code), product)
+        }
+        const nameKey = normalize(product.name)
+        if (nameKey) productsByName.set(nameKey, [...(productsByName.get(nameKey) || []), product])
+      }
+
+      const existingBySku = new Map(existingMappings.map(row => [normalize(row.erp_sku), row.product_id]))
+      let autoMatched = 0
+      let alreadyMatched = 0
+      const productPrimarySkuUpdates = new Map()
+
+      const payload = parsed.records.map(record => {
+        const existingProductId = existingBySku.get(normalize(record.erp_sku)) || null
+        let matchedProduct = productByCode.get(normalize(record.erp_sku)) || null
+        if (!matchedProduct && record.name) {
+          const sameNameProducts = productsByName.get(normalize(record.name)) || []
+          if (sameNameProducts.length === 1) matchedProduct = sameNameProducts[0]
+        }
+
+        const productId = existingProductId || matchedProduct?.id || null
+        if (existingProductId) alreadyMatched += 1
+        else if (matchedProduct) {
+          autoMatched += 1
+          if (!matchedProduct.erp_sku && !productPrimarySkuUpdates.has(matchedProduct.id)) {
+            productPrimarySkuUpdates.set(matchedProduct.id, record.erp_sku)
+          }
+        }
+        return { ...record, product_id: productId }
+      })
+
+      const batchSize = 300
+      for (let index = 0; index < payload.length; index += batchSize) {
+        const { error } = await supabase
+          .from('erp_master_skus')
+          .upsert(payload.slice(index, index + batchSize), { onConflict: 'erp_sku' })
+        if (error) throw error
+      }
+
+      for (const [productId, erpSku] of productPrimarySkuUpdates) {
+        const { error } = await supabase
+          .from('products')
+          .update({ erp_sku: erpSku })
+          .eq('id', productId)
+          .is('erp_sku', null)
+        if (error && !error.message.toLowerCase().includes('duplicate')) throw error
+      }
+
+      setMasterImportResult({
+        imported: payload.length,
+        duplicateRows: parsed.duplicateRows,
+        autoMatched,
+        alreadyMatched,
+        waiting: payload.length - autoMatched - alreadyMatched,
+      })
+    } catch (error) {
+      const missingTable = error.code === '42P01' || /erp_master_skus|schema cache/i.test(error.message || '')
+      setMasterImportError(missingTable
+        ? 'ยังไม่มีตารางทะเบียน ERP ในฐานข้อมูล กรุณารันไฟล์ SQL ที่เตรียมไว้ใน Supabase ก่อน'
+        : (error.message || 'นำเข้า Master SKU ไม่สำเร็จ'))
+    } finally {
+      setMasterImporting(false)
+    }
+  }
 
   function handleFileChange(e) {
     const f = e.target.files[0]
@@ -195,16 +398,31 @@ export default function OrderImport() {
       if (error) throw new Error(`อ่านข้อมูลสต็อกไม่ได้: ${error.message}`)
       setStockProducts(products || [])
 
+      let masterMappings = []
+      try {
+        masterMappings = await fetchMappingsForSkus(parsed.orderItems.map(item => item.erpSku))
+      } catch (mappingError) {
+        const missingTable = mappingError.code === '42P01' || /erp_master_skus|schema cache/i.test(mappingError.message || '')
+        if (!missingTable) throw mappingError
+      }
+
       const byErpSku = new Map()
       const byBarcode = new Map()
       const byProductCode = new Map()
       const byName = new Map()
+      const byProductId = new Map()
       for (const product of products || []) {
+        byProductId.set(product.id, product)
         if (normalize(product.erp_sku)) byErpSku.set(normalize(product.erp_sku), product)
         if (normalize(product.barcode)) byBarcode.set(normalize(product.barcode), product)
         if (normalize(product.product_code)) byProductCode.set(normalize(product.product_code), product)
         if (normalize(product.name)) byName.set(normalize(product.name), product)
       }
+      const mappedProductByErpSku = new Map(
+        masterMappings
+          .filter(mapping => mapping.product_id && byProductId.has(mapping.product_id))
+          .map(mapping => [normalize(mapping.erp_sku), byProductId.get(mapping.product_id)]),
+      )
 
       const toBuy = []
       const fromStock = []
@@ -212,6 +430,7 @@ export default function OrderImport() {
 
       for (const item of parsed.orderItems) {
         const match =
+          (item.erpSku && mappedProductByErpSku.get(normalize(item.erpSku))) ||
           (item.erpSku && byErpSku.get(normalize(item.erpSku))) ||
           (item.erpSku && byBarcode.get(normalize(item.erpSku))) ||
           (item.erpSku && byProductCode.get(normalize(item.erpSku))) ||
@@ -269,17 +488,33 @@ export default function OrderImport() {
     if (!mappingItem || !mappingProductId) return
     setSavingMapping(true)
     setMappingError('')
-    const { error } = await supabase
-      .from('products')
-      .update({ erp_sku: mappingItem.erpSku })
-      .eq('id', mappingProductId)
+    const selectedProduct = stockProducts.find(product => product.id === mappingProductId)
+    const { error: catalogError } = await supabase
+      .from('erp_master_skus')
+      .upsert({
+        erp_sku: mappingItem.erpSku,
+        name: mappingItem.name || '',
+        product_id: mappingProductId,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'erp_sku' })
 
-    if (error) {
-      setMappingError(error.message.includes('duplicate')
-        ? 'ERP SKU นี้ถูกจับคู่กับสินค้าอื่นแล้ว'
-        : `บันทึกการจับคู่ไม่ได้: ${error.message}`)
+    if (catalogError) {
+      setMappingError(`บันทึกการจับคู่ไม่ได้: ${catalogError.message}`)
       setSavingMapping(false)
       return
+    }
+
+    if (!selectedProduct?.erp_sku) {
+      const { error: productError } = await supabase
+        .from('products')
+        .update({ erp_sku: mappingItem.erpSku })
+        .eq('id', mappingProductId)
+        .is('erp_sku', null)
+      if (productError && !productError.message.toLowerCase().includes('duplicate')) {
+        setMappingError(`บันทึก ERP SKU ที่สินค้าไม่ได้: ${productError.message}`)
+        setSavingMapping(false)
+        return
+      }
     }
 
     setMappingItem(null)
@@ -342,9 +577,84 @@ export default function OrderImport() {
         <p className="text-sm text-slate-500 mt-0.5">วิเคราะห์คำสั่งซื้อของทีม MER แล้วแยกว่าควรซื้อเพิ่มหรือหยิบจาก Stock</p>
       </div>
 
+      {/* Master SKU registry */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+            <Database size={20} />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-800">ขั้นตอนที่ 1: นำเข้าทะเบียน Master SKU จาก ERP</p>
+            <p className="text-xs text-slate-500 mt-0.5">ระบบจะเก็บคอลัมน์ A: master_sku_product_code เป็น ERP SKU โดยรักษาเลข 0 ด้านหน้าไว้ครบ</p>
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1">
+            {masterFile ? (
+              <div className="flex items-center gap-2 px-3 py-2 border border-slate-200 rounded-lg bg-slate-50">
+                <FileSpreadsheet size={16} className="text-blue-600 shrink-0" />
+                <span className="text-sm text-slate-700 truncate flex-1">{masterFile.name}</span>
+                <button onClick={clearMasterFile} className="text-slate-400 hover:text-slate-600 transition-colors" aria-label="ล้างไฟล์ Master SKU">
+                  <X size={15} />
+                </button>
+              </div>
+            ) : (
+              <label className="flex items-center gap-2 px-3 py-2 border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                <Upload size={16} className="text-slate-400" />
+                <span className="text-sm text-slate-500">เลือกไฟล์ master-skus-export.csv</span>
+                <input
+                  ref={masterFileInputRef}
+                  type="file"
+                  accept=".csv"
+                  onChange={handleMasterFileChange}
+                  className="hidden"
+                />
+              </label>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={importMasterSkus}
+            disabled={!masterFile || masterImporting}
+            className="px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {masterImporting ? 'กำลังนำเข้า...' : 'นำเข้า Master SKU'}
+          </button>
+        </div>
+
+        <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          ใช้ไฟล์ CSV ต้นฉบับจาก ERP ระบบจะใช้ชื่อสินค้าในคอลัมน์ B ช่วยจับคู่กับสินค้า Stock ที่ชื่อเหมือนกันโดยอัตโนมัติ
+        </div>
+
+        {masterImportError && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span>{masterImportError}</span>
+          </div>
+        )}
+
+        {masterImportResult && (
+          <div className="mt-3 rounded-xl border border-green-200 bg-green-50 p-3">
+            <div className="flex items-center gap-2 text-green-700 font-semibold text-sm">
+              <CheckCircle size={17} /> นำเข้าทะเบียน ERP สำเร็จ
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-center">
+              <div><p className="text-lg font-bold text-slate-800">{masterImportResult.imported.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">ERP SKU ไม่ซ้ำ</p></div>
+              <div><p className="text-lg font-bold text-green-600">{masterImportResult.autoMatched.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">จับคู่อัตโนมัติใหม่</p></div>
+              <div><p className="text-lg font-bold text-blue-600">{masterImportResult.alreadyMatched.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">เคยจับคู่แล้ว</p></div>
+              <div><p className="text-lg font-bold text-amber-600">{masterImportResult.waiting.toLocaleString('th-TH')}</p><p className="text-[11px] text-slate-500">รอจับคู่</p></div>
+            </div>
+            {masterImportResult.duplicateRows > 0 && (
+              <p className="text-xs text-slate-500 mt-2 text-center">รวมรายการซ้ำในไฟล์แล้ว {masterImportResult.duplicateRows.toLocaleString('th-TH')} แถว</p>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Upload card */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-        <p className="text-sm font-medium text-slate-700 mb-1">อัปโหลดไฟล์ Export by Buyer จาก ERP</p>
+        <p className="text-sm font-medium text-slate-700 mb-1">ขั้นตอนที่ 2: อัปโหลดไฟล์ Export by Buyer จาก ERP</p>
         <p className="text-xs text-slate-500 mb-3">อ่านคอลัมน์ E: master_sku_product_code และเลือกเฉพาะ assign_name = MER</p>
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="flex-1">
@@ -402,17 +712,17 @@ export default function OrderImport() {
         <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <div>
             <h2 className="text-base font-bold text-slate-800">วิธีจับคู่สินค้า ERP กับ Stock</h2>
-            <p className="text-xs text-slate-500 mt-0.5">จับคู่สินค้าแต่ละรายการเพียงครั้งเดียว ระบบจะจำ ERP SKU ไว้ใช้ครั้งต่อไป</p>
+            <p className="text-xs text-slate-500 mt-0.5">นำเข้าทะเบียน Master SKU ก่อน ระบบจะจับคู่จากรหัสและชื่อสินค้าให้อัตโนมัติ</p>
           </div>
           <span className="px-2.5 py-1 rounded-full bg-green-50 text-green-700 text-xs font-medium">ทำครั้งแรกครั้งเดียว</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {[
-            { number: 1, title: 'อัปโหลดและวิเคราะห์', text: 'เลือกไฟล์ CSV จาก ERP แล้วกด “วิเคราะห์ไฟล์”' },
-            { number: 2, title: 'เปิดรายการไม่พบ', text: 'กดแท็บ “ไม่พบในระบบ” เพื่อดู SKU ที่ยังไม่เชื่อม' },
-            { number: 3, title: 'กดจับคู่สินค้า', text: 'เลือกรายการ แล้วกดปุ่ม “จับคู่สินค้า” ด้านขวา' },
-            { number: 4, title: 'เลือกและบันทึก', text: 'เลือกสินค้าที่ตรงกันใน Stock แล้วกด “บันทึกการจับคู่”' },
+            { number: 1, title: 'นำเข้า Master SKU', text: 'เลือก master-skus-export.csv แล้วกด “นำเข้า Master SKU”' },
+            { number: 2, title: 'วิเคราะห์คำสั่งซื้อ', text: 'อัปโหลด Export by Buyer ระบบจะจับคู่ให้อัตโนมัติ' },
+            { number: 3, title: 'ตรวจรายการไม่พบ', text: 'เปิดแท็บ “ไม่พบในระบบ” เฉพาะรายการที่ยังไม่ตรง' },
+            { number: 4, title: 'จับคู่ส่วนที่เหลือ', text: 'เลือกสินค้า Stock แล้วบันทึกครั้งเดียว ระบบจะจำไว้' },
           ].map(step => (
             <div key={step.number} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="w-7 h-7 rounded-full bg-red-600 text-white text-sm font-bold flex items-center justify-center mb-2">
@@ -657,14 +967,14 @@ export default function OrderImport() {
                 className="w-full px-3 py-3 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
               >
                 <option value="">-- เลือกสินค้า --</option>
-                {stockProducts.filter(product => !product.erp_sku).map(product => (
+                {stockProducts.map(product => (
                   <option key={product.id} value={product.id}>
-                    {product.name} — {product.product_code || product.barcode}
+                    {product.name} — {product.product_code || product.barcode}{product.erp_sku ? ` — ERP ${product.erp_sku}` : ''}
                   </option>
                 ))}
               </select>
-              {stockProducts.filter(product => !product.erp_sku).length === 0 && (
-                <p className="text-xs text-amber-700 mt-2">ยังไม่มีสินค้าว่างสำหรับจับคู่ กรุณาเพิ่มสินค้าในหน้า “จัดการสินค้า” ก่อน</p>
+              {stockProducts.length === 0 && (
+                <p className="text-xs text-amber-700 mt-2">ยังไม่มีสินค้าใน Stock กรุณาเพิ่มสินค้าในหน้า “จัดการสินค้า” ก่อน</p>
               )}
             </div>
 
