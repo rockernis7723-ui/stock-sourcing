@@ -82,7 +82,7 @@ export default function Products() {
       erp_sku: p.erp_sku || '',
     })
     setUnitError('')
-    setUnitSearch(selectedUnit ? `${selectedUnit.erp_unit_code} — ${selectedUnit.name}` : '')
+    setUnitSearch(selectedUnit?.name || '')
     setUnitDropdownOpen(false)
     setEditId(p.id)
     setModal(true)
@@ -242,7 +242,7 @@ export default function Products() {
     (p.unit || '').toLowerCase().includes(search.toLowerCase())
   )
 
-  const selectedUnitLabel = form.unit_code ? `${form.unit_code} — ${form.unit}` : ''
+  const selectedUnitLabel = form.unit_code ? form.unit : ''
   const normalizedUnitSearch = unitSearch === selectedUnitLabel ? '' : unitSearch.trim().toLowerCase()
   const filteredUnits = units.filter(unit =>
     !normalizedUnitSearch ||
@@ -446,7 +446,7 @@ export default function Products() {
                             unit_code: unit.erp_unit_code,
                             unit: unit.name,
                           }))
-                          setUnitSearch(`${unit.erp_unit_code} — ${unit.name}`)
+                          setUnitSearch(unit.name)
                           setUnitError('')
                           setUnitDropdownOpen(false)
                         }}
@@ -456,8 +456,6 @@ export default function Products() {
                             : 'text-slate-700 hover:bg-slate-100'
                         }`}
                       >
-                        <span className="font-mono font-semibold">{unit.erp_unit_code}</span>
-                        <span className="mx-2 text-slate-400">—</span>
                         <span>{unit.name}</span>
                       </button>
                     )) : (
