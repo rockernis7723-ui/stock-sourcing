@@ -12,19 +12,52 @@ create table profiles (
   created_at timestamptz default now()
 );
 
--- 2. Products (สินค้า)
+-- 2. Product Units (ทะเบียนหน่วยสินค้า)
+create table product_units (
+  id uuid default gen_random_uuid() primary key,
+  erp_unit_code text not null unique,
+  name text not null,
+  is_active boolean not null default true,
+  allow_stock boolean not null default true,
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index product_units_stock_dropdown_idx on product_units (sort_order, erp_unit_code, name)
+  where is_active = true and allow_stock = true;
+
+insert into product_units (erp_unit_code, name, sort_order) values
+  ('00', 'กก.', 1), ('01', 'แพ็ค', 2), ('02', 'กรัม', 3), ('03', 'ลูก', 4),
+  ('04', 'ฝัก', 5), ('05', 'มัด', 6), ('06', 'ขวด', 7), ('07', 'ฟอง', 8),
+  ('09', 'ซอง', 9), ('10', 'ขวด', 10), ('11', 'หวี', 11), ('12', 'ถุง', 12),
+  ('13', 'กล่อง', 13), ('14', 'ลัง', 14), ('15', 'กระป๋อง', 15),
+  ('16', 'ตะกร้า', 16), ('17', 'กระสอบ', 17), ('18', 'เข่ง', 18),
+  ('19', 'แผง', 19), ('21', 'กำ', 20), ('22', 'พวง', 21), ('23', 'ก้อน', 22),
+  ('25', 'ห่อ', 23), ('27', 'แผ่น', 24), ('28', 'กระปุก', 25),
+  ('29', 'ตัว', 26), ('31', 'ใบ', 27), ('32', 'หลอด', 28), ('33', 'ถาด', 29),
+  ('34', 'ถัง', 30), ('36', 'แท่ง', 31), ('37', 'ครั้ง', 32), ('38', 'ชิ้น', 33),
+  ('39', 'อัน', 34), ('41', 'ปี๊บ', 35), ('42', 'ผืน', 36), ('44', 'ถ้วย', 37),
+  ('46', 'ม้วน', 38), ('49', 'กระสอบ', 39), ('50', 'อัน', 40),
+  ('51', 'เส้น', 41), ('52', 'กระป๋อง', 42), ('53', 'เตา', 43),
+  ('54', 'ชุด', 44), ('55', 'หม้อ', 45), ('58', 'ดอก', 46), ('59', 'ด้าม', 47),
+  ('61', 'ปี๊บ', 48), ('62', 'แกลลอน', 49), ('66', 'แก้ว', 50),
+  ('67', 'กลม', 51), ('69', 'ขวด', 52);
+
+-- 3. Products (สินค้า)
 create table products (
   id uuid default gen_random_uuid() primary key,
   barcode text not null unique,
   erp_sku text unique,
   name text not null,
-  unit text not null default 'ชิ้น',
+  unit_code text,
+  unit text not null,
   current_stock int not null default 0,
   min_stock int not null default 0,
   created_at timestamptz default now()
 );
 
--- 3. ERP Master SKU Registry (ทะเบียน Product Code จาก ERP)
+-- 4. ERP Master SKU Registry (ทะเบียน Product Code จาก ERP)
 create table erp_master_skus (
   erp_sku text primary key,
   name text not null default '',
@@ -43,7 +76,7 @@ create table erp_master_skus (
 
 create index erp_master_skus_product_id_idx on erp_master_skus(product_id);
 
--- 4. Stock Lots (ล็อตสินค้าแต่ละล็อต สำหรับ FEFO)
+-- 5. Stock Lots (ล็อตสินค้าแต่ละล็อต สำหรับ FEFO)
 create table stock_lots (
   id uuid default gen_random_uuid() primary key,
   product_id uuid references products on delete cascade not null,
@@ -52,7 +85,7 @@ create table stock_lots (
   created_at timestamptz default now()
 );
 
--- 5. Transactions (ประวัติรับเข้า/จ่ายออก)
+-- 6. Transactions (ประวัติรับเข้า/จ่ายออก)
 create table transactions (
   id uuid default gen_random_uuid() primary key,
   product_id uuid references products on delete cascade not null,
@@ -93,6 +126,7 @@ $$;
 -- Row Level Security (RLS)
 -- ===================================================
 alter table profiles enable row level security;
+alter table product_units enable row level security;
 alter table products enable row level security;
 alter table erp_master_skus enable row level security;
 alter table stock_lots enable row level security;
@@ -106,6 +140,9 @@ create policy "profiles_delete" on profiles for delete using (auth.role() = 'aut
 
 -- Products: ทุก user ที่ login แล้วเข้าถึงได้
 create policy "products_all" on products for all using (auth.role() = 'authenticated');
+
+-- Product units: ผู้ใช้ที่ login แล้วอ่านเฉพาะทะเบียนหน่วยได้
+create policy "product_units_select" on product_units for select using (auth.role() = 'authenticated');
 
 -- ERP Master SKU: ทุก user ที่ login แล้วอ่านได้ และหน้า Admin/Manager เป็นผู้จัดการข้อมูล
 create policy "erp_master_skus_all" on erp_master_skus for all

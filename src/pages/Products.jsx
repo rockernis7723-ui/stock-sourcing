@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Plus, Pencil, Trash2, Search, X, Camera, Printer } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, X, Camera, Printer, ChevronDown } from 'lucide-react'
 import { Html5Qrcode } from 'html5-qrcode'
 import JsBarcode from 'jsbarcode'
 import { supabase } from '../lib/supabase'
 
-const emptyForm = { name: '', barcode: '', unit: 'ชิ้น', min_stock: 0, product_code: '', erp_sku: '' }
+const emptyForm = { name: '', barcode: '', unit_code: '', unit: '', min_stock: 0, product_code: '', erp_sku: '' }
 
 export default function Products() {
   const [products, setProducts] = useState([])
@@ -14,6 +14,11 @@ export default function Products() {
   const [form, setForm] = useState(emptyForm)
   const [editId, setEditId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [unitError, setUnitError] = useState('')
+  const [units, setUnits] = useState([])
+  const [unitsLoading, setUnitsLoading] = useState(true)
+  const [unitSearch, setUnitSearch] = useState('')
+  const [unitDropdownOpen, setUnitDropdownOpen] = useState(false)
   const [scanningBarcode, setScanningBarcode] = useState(false)
   const [barcodeCameraOpen, setBarcodeCameraOpen] = useState(false)
   const [printProduct, setPrintProduct] = useState(null)
@@ -21,7 +26,10 @@ export default function Products() {
   const html5QrBarRef = useRef(null)
   const barcodeRef = useRef(null)
 
-  useEffect(() => { fetchProducts() }, [])
+  useEffect(() => {
+    fetchProducts()
+    fetchProductUnits()
+  }, [])
 
   async function fetchProducts() {
     const { data } = await supabase.from('products').select('*').order('name')
@@ -29,31 +37,87 @@ export default function Products() {
     setLoading(false)
   }
 
+  async function fetchProductUnits() {
+    setUnitsLoading(true)
+    const { data, error } = await supabase
+      .from('product_units')
+      .select('erp_unit_code, name')
+      .not('erp_unit_code', 'is', null)
+      .eq('is_active', true)
+      .eq('allow_stock', true)
+      .order('sort_order')
+      .order('name')
+
+    if (error) {
+      console.error('Error loading product units:', error)
+      setUnits([])
+      setUnitError('ไม่สามารถโหลดหน่วยสินค้าได้ กรุณาลองใหม่อีกครั้ง')
+    } else {
+      setUnits(data || [])
+    }
+    setUnitsLoading(false)
+  }
+
   function openCreate() {
     setForm(emptyForm)
+    setUnitError('')
+    setUnitSearch('')
+    setUnitDropdownOpen(false)
     setEditId(null)
     setModal(true)
   }
 
   function openEdit(p) {
+    const unitByCode = units.find(unit => unit.erp_unit_code === p.unit_code)
+    const unitsByName = units.filter(unit => unit.name === p.unit)
+    const selectedUnit = unitByCode || (unitsByName.length === 1 ? unitsByName[0] : null)
+
     setForm({
       name: p.name,
       barcode: p.barcode,
-      unit: p.unit,
+      unit_code: selectedUnit?.erp_unit_code || '',
+      unit: selectedUnit?.name || '',
       min_stock: p.min_stock,
       product_code: p.product_code || '',
       erp_sku: p.erp_sku || '',
     })
+    setUnitError('')
+    setUnitSearch(selectedUnit ? `${selectedUnit.erp_unit_code} — ${selectedUnit.name}` : '')
+    setUnitDropdownOpen(false)
     setEditId(p.id)
     setModal(true)
   }
 
   async function handleSave() {
+    if (!form.unit_code) {
+      setUnitError('กรุณาเลือกหน่วยสินค้าก่อนบันทึก')
+      return
+    }
+
+    const { data: allowedUnit, error: unitCheckError } = await supabase
+      .from('product_units')
+      .select('erp_unit_code, name')
+      .eq('erp_unit_code', form.unit_code)
+      .eq('is_active', true)
+      .eq('allow_stock', true)
+      .maybeSingle()
+
+    if (unitCheckError || !allowedUnit) {
+      setUnitError('หน่วยนี้ไม่ Active หรือไม่ได้รับอนุญาตให้ใช้กับ Stock กรุณาเลือกใหม่')
+      await fetchProductUnits()
+      return
+    }
+    setUnitError('')
     if (!form.name || !form.barcode) return
     setSaving(true)
 
     try {
-      const payload = { ...form, erp_sku: form.erp_sku.trim() || null }
+      const payload = {
+        ...form,
+        unit_code: allowedUnit.erp_unit_code,
+        unit: allowedUnit.name,
+        erp_sku: form.erp_sku.trim() || null,
+      }
       if (editId) {
         const { error } = await supabase.from('products').update(payload).eq('id', editId)
         if (error) throw error
@@ -173,7 +237,17 @@ export default function Products() {
     p.name.toLowerCase().includes(search.toLowerCase()) ||
     p.barcode.includes(search) ||
     (p.product_code || '').toLowerCase().includes(search.toLowerCase()) ||
-    (p.erp_sku || '').toLowerCase().includes(search.toLowerCase())
+    (p.erp_sku || '').toLowerCase().includes(search.toLowerCase()) ||
+    (p.unit_code || '').toLowerCase().includes(search.toLowerCase()) ||
+    (p.unit || '').toLowerCase().includes(search.toLowerCase())
+  )
+
+  const selectedUnitLabel = form.unit_code ? `${form.unit_code} — ${form.unit}` : ''
+  const normalizedUnitSearch = unitSearch === selectedUnitLabel ? '' : unitSearch.trim().toLowerCase()
+  const filteredUnits = units.filter(unit =>
+    !normalizedUnitSearch ||
+    unit.erp_unit_code.toLowerCase().includes(normalizedUnitSearch) ||
+    unit.name.toLowerCase().includes(normalizedUnitSearch)
   )
 
   return (
@@ -193,7 +267,7 @@ export default function Products() {
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="ค้นหาชื่อ บาร์โค้ด SKU หรือ ERP SKU..."
+          placeholder="ค้นหาชื่อ บาร์โค้ด SKU, ERP SKU, Unit Code หรือ Unit Name..."
           className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
         />
       </div>
@@ -216,7 +290,9 @@ export default function Products() {
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5">{p.barcode} · หน่วย: {p.unit}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {p.barcode} · หน่วย: {p.unit_code ? `${p.unit_code} — ` : ''}{p.unit}
+                  </p>
                   {p.erp_sku && (
                     <p className="text-xs text-emerald-600 font-mono mt-0.5">ERP SKU: {p.erp_sku}</p>
                   )}
@@ -291,8 +367,6 @@ export default function Products() {
 
             {[
               { label: 'ชื่อสินค้า', key: 'name', type: 'text', placeholder: 'เช่น น้ำดื่ม 600ml' },
-              { label: 'หน่วย', key: 'unit', type: 'text', placeholder: 'ชิ้น, ขวด, กล่อง' },
-              { label: 'สต็อกขั้นต่ำ', key: 'min_stock', type: 'number', placeholder: '' },
             ].map(({ label, key, type, placeholder }) => (
               <div key={key}>
                 <label className="block text-sm font-medium text-slate-700 mb-1">{label}</label>
@@ -306,6 +380,112 @@ export default function Products() {
                 />
               </div>
             ))}
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">หน่วย</label>
+              <div
+                className="relative"
+                onBlur={e => {
+                  if (!e.currentTarget.contains(e.relatedTarget)) {
+                    setUnitDropdownOpen(false)
+                    if (form.unit_code) setUnitSearch(selectedUnitLabel)
+                  }
+                }}
+              >
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <input
+                  type="text"
+                  role="combobox"
+                  aria-expanded={unitDropdownOpen}
+                  aria-controls="product-unit-options"
+                  aria-autocomplete="list"
+                  aria-invalid={unitError ? 'true' : 'false'}
+                  value={unitSearch}
+                  onFocus={e => {
+                    e.target.select()
+                    setUnitDropdownOpen(true)
+                  }}
+                  onChange={e => {
+                    setUnitSearch(e.target.value)
+                    setUnitDropdownOpen(true)
+                    setForm(f => ({ ...f, unit_code: '', unit: '' }))
+                    setUnitError('')
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') setUnitDropdownOpen(false)
+                  }}
+                  placeholder={unitsLoading ? 'กำลังโหลดหน่วย...' : 'เลือกหรือค้นหา Unit Code / Unit Name'}
+                  className={`w-full pl-9 pr-10 py-3 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-500 ${unitError ? 'border-red-500' : 'border-slate-200'}`}
+                  disabled={unitsLoading}
+                />
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => setUnitDropdownOpen(open => !open)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-700"
+                  aria-label="เปิดรายการหน่วย"
+                  disabled={unitsLoading}
+                >
+                  <ChevronDown size={18} className={`transition-transform ${unitDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {unitDropdownOpen && !unitsLoading && (
+                  <div
+                    id="product-unit-options"
+                    role="listbox"
+                    className="absolute z-30 mt-1 w-full max-h-52 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg p-1"
+                  >
+                    {filteredUnits.length > 0 ? filteredUnits.map(unit => (
+                      <button
+                        key={unit.erp_unit_code}
+                        type="button"
+                        role="option"
+                        aria-selected={form.unit_code === unit.erp_unit_code}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => {
+                          setForm(f => ({
+                            ...f,
+                            unit_code: unit.erp_unit_code,
+                            unit: unit.name,
+                          }))
+                          setUnitSearch(`${unit.erp_unit_code} — ${unit.name}`)
+                          setUnitError('')
+                          setUnitDropdownOpen(false)
+                        }}
+                        className={`w-full px-3 py-2.5 rounded-lg text-left text-sm transition-colors ${
+                          form.unit_code === unit.erp_unit_code
+                            ? 'bg-red-50 text-red-700 font-semibold'
+                            : 'text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span className="font-mono font-semibold">{unit.erp_unit_code}</span>
+                        <span className="mx-2 text-slate-400">—</span>
+                        <span>{unit.name}</span>
+                      </button>
+                    )) : (
+                      <p className="px-3 py-4 text-center text-sm text-slate-400">
+                        ไม่พบ Unit Code หรือ Unit Name ที่ค้นหา
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-slate-400 mt-1">ค้นหาและเลือกจากหน่วย ERP ที่ Active สำหรับ Stock เท่านั้น</p>
+              {unitError && <p className="text-xs text-red-600 mt-1">{unitError}</p>}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">สต็อกขั้นต่ำ</label>
+              <input
+                type="number"
+                value={form.min_stock === 0 ? '' : form.min_stock}
+                onChange={e => setForm(f => ({ ...f, min_stock: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 }))}
+                placeholder=""
+                min="0"
+                className="w-full px-3 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
 
             {/* Barcode field with camera viewfinder */}
             <div>
