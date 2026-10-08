@@ -401,10 +401,7 @@ export default function Products() {
                   aria-autocomplete="list"
                   aria-invalid={unitError ? 'true' : 'false'}
                   value={unitSearch}
-                  onFocus={e => {
-                    e.target.select()
-                    setUnitDropdownOpen(true)
-                  }}
+                  onFocus={() => setUnitDropdownOpen(true)}
                   onChange={e => {
                     setUnitSearch(e.target.value)
                     setUnitDropdownOpen(true)
